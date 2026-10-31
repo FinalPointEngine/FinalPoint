@@ -53,7 +53,6 @@ def rules_card():
              "Edge size: 6-10% +10, 10-15% +5, 15%+ suspicious -10, 25%+ -25",
              "Persistence: held 3+ checks +15, 2 checks +8, 1 check -3",
              "Fair-probability drift: up +10, down 2+ pts -20",
-             "CLV proxy vs latest Pinnacle: +2% +10, negative -15",
              "Stale Pinnacle price -15; long odds / low win chance -10",
              "Kick-off passed -30; under 10 min -8",
              "Sport record over 20+ graded: -10 or +5",

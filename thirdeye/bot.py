@@ -104,10 +104,13 @@ class EyeBot:
         return Html(self.eye.alert_text(v, "REASONING"))
 
     def cmd_clv(self, a):
-        b = self.eye.board()
-        if b["clv"] is None:
-            return "No closing-line data yet."
-        return "Average closing-line proxy %+.1f%% over %d picks (latest Pinnacle price against the price the engine gave)." % (b["clv"] * 100, b["clv_n"])
+        b, c = self.eye.board(), self.eye.call_clv()
+        out = []
+        if b["clv"] is not None:
+            out.append("Engine picks: closing-line proxy %+.1f%% over %d picks." % (b["clv"] * 100, b["clv_n"]))
+        if c:
+            out.append("ThirdEye's own calls: %+.1f%% over %d calls, %d of them positive." % (c["clv"] * 100, c["n"], c["pos"]))
+        return "\n".join(out) or "No closing-line data yet."
 
     def cmd_sports(self, a):
         return Html(cards.sports_card(self.eye))

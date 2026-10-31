@@ -213,6 +213,7 @@ class Engine:
         elig = [c for c in cands if c["why_not"] is None]
         chk["keys"] = [model.pkey(c) for c in elig]
         chk["pmap"] = {model.pkey(c): round(c["p"], 4) for c in cands}
+        chk["omap"] = {model.pkey(c): [c["odds"], round(c["margin"], 3)] for c in cands}   # SportyBet price and margin of every selection (read by ThirdEye)
         prev_keys = set((prev or {}).get("keys") or [])
         prev_p = (prev or {}).get("pmap") or {}
         moves = {k: v - prev_p[k] for k, v in chk["pmap"].items() if k in prev_p}

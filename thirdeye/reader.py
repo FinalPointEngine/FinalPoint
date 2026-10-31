@@ -109,7 +109,9 @@ def canon_match(sport, m):
         why = why[0] if why else ""
     return dict(sport=sport, key=m.get("key") or "%s|%s" % (m.get("home"), m.get("away")), lname=m.get("lname", ""), home=m.get("home", ""),
                 away=m.get("away", ""), tip=_epoch(m.get("tip")), n_checks=len(checks), n_keys=len(last.get("keys") or []),
-                stale=bool(last.get("stale")), why=str(why)[:60], skipped=bool(m.get("skipped")))
+                stale=bool(last.get("stale")), why=str(why)[:60], skipped=bool(m.get("skipped")),
+                checks=[dict(t=c.get("t") or 0, pmap=c.get("pmap") or {}, omap=c.get("omap") or {}) for c in checks[-8:] if c.get("pmap")],
+                engine_keys=list(m.get("play_keys") or []))
 
 
 def canon_bb(r):

@@ -135,20 +135,38 @@ def match(i, **k):
     return d
 
 
-def test_day_card_lists_every_match_and_splits_pages():
+def with_prices(m, over=2.0):
+    ck = dict(t=NOW - 600, pmap={"total|2.5|over": 0.55, "total|2.5|under": 0.45}, omap={"total|2.5|over": [over, 0.05], "total|2.5|under": [1.8, 0.05]})
+    m["checks"] = [dict(ck, t=NOW - 1800), dict(ck, t=NOW - 1200), ck]
+    m["engine_keys"] = []
+    return m
+
+
+def test_own_model_blend_and_call():
+    from thirdeye import model
+    pr = model.own_probs({"total|2.5|over": [2.0, 0.05], "total|2.5|under": [1.8, 0.05]}, {"total|2.5|over": 0.55, "total|2.5|under": 0.45})
+    pin, sp, te = pr["total|2.5|over"]
+    assert pin == 0.55 and 0.47 < sp < 0.48 and pin > te > sp
+    c = model.call_for(with_prices(match(1)), NOW)
+    assert c and c["key"] == "total|2.5|over" and c["desc"] == "Over 2.5" and 0.03 <= c["ev"] <= 0.15
+    assert model.call_for(with_prices(match(1, tip=NOW - 5)), NOW) is None           # already started
+    assert model.call_for(with_prices(match(1), over=1.6), NOW) is None             # no edge at 1.60
+    assert model.describe("ah|-1.5|home", "A", "B") == "A -1.5" and model.describe("1x2||away", "A", "B") == "B to win"
+
+
+def test_day_card_shows_own_calls_not_the_no_bet_list_and_splits_pages():
     r = FakeReader("football", [pick(mkey="m0")])
-    r.matches = [match(i) for i in range(120)]
-    r.matches[1]["n_keys"] = 1
-    r.matches[2]["n_checks"] = 0
+    r.matches = [with_prices(match(i)) for i in range(1, 121)] + [match(500 + i) for i in range(30)]     # 30 matches with no call
     cards = FakeCards()
     eye, _, _ = mk({"football": r}, cards)
     eye.tick()
-    assert len(cards.puts) >= 2                                   # 60 matches do not fit one card
+    assert len(cards.puts) >= 2                                   # 120 calls do not fit one card
     page1 = cards.puts["te_day:football:1"]
-    assert "120 matches" in page1 and "APPROVE" in page1 and "no edge" in page1 and "not priced" in page1 and "edge forming" in page1
+    assert "150 matches re-priced" in page1 and "own call" in page1 and "Over 2.5" in page1 and "no edge" not in page1
     assert "page 2" in cards.puts["te_day:football:2"]
     assert all(len(x) < 4000 for x in cards.puts.values())
-    assert eye.find_match("home0")
+    assert eye.find_match("home1")
+    assert eye.call_clv() is None or eye.call_clv()["n"] >= 0
 
 
 def test_result_before_kickoff_is_flagged_and_kept_out_of_the_record():
@@ -167,3 +185,20 @@ def test_settled_pick_text_has_no_action_line():
     eye.tick()
     txt = eye.alert_text(eye.st.v["football:1"], "REASONING")
     assert "Settled" in txt and "do not bet yet" not in txt and "Action:" not in txt
+
+
+def test_clv_is_not_double_counted_in_the_score():
+    a = verdict.judge(pick(close=0.70), NOW)["score"]
+    b = verdict.judge(pick(close=0.40), NOW)["score"]
+    assert a == b
+
+
+def test_verdict_given_before_the_game_is_not_rewritten_afterwards():
+    r = FakeReader("football", [pick()])
+    eye, _, _ = mk({"football": r})
+    eye.tick()
+    before = (eye.st.v["football:1"]["label"], eye.st.v["football:1"]["score"])
+    r.picks = [pick(status="lost", ret=-1.0, tip=NOW - 7200, hist=[], close=None)]
+    eye.tick()
+    v = eye.st.v["football:1"]
+    assert (v["label"], v["score"]) == before and v["status"] == "lost"

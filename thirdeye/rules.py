@@ -44,7 +44,8 @@ def r_drift(p):
 
 
 def r_clv(p):
-    """Closing-line proxy: the latest fair probability times the odds we were given."""
+    """Closing-line proxy. NOT used in the live score (before kick-off it equals the edge, so it would count it twice);
+    it is only a measurement after the game."""
     c = p.get("close")
     if not c or not p["odds"]:
         return 0, None

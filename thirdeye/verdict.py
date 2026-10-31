@@ -8,7 +8,7 @@ LABELS = {"APPROVE": 1.0, "REDUCE": 0.5, "WATCH": 0.0, "REJECT": 0.0}
 
 def judge(p, now, rec=None, open_same_match=0, open_sport=0):
     score, reasons = 50.0, []
-    for pts, why in (rules.r_edge(p), rules.r_persistence(p), rules.r_drift(p), rules.r_clv(p), rules.r_stale(p), rules.r_range(p),
+    for pts, why in (rules.r_edge(p), rules.r_persistence(p), rules.r_drift(p), rules.r_stale(p), rules.r_range(p),
                      rules.r_timing(p, now), rules.r_record(rec), rules.r_exposure(p, open_same_match, open_sport)):
         score += pts
         if why:
