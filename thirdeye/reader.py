@@ -73,7 +73,7 @@ class DbReader:
     def _basketball(self, conn):
         from sqlalchemy import text
         rows = conn.execute(text("SELECT id, created_at, league, home, away, commence, market, selection, line, fair_odds, min_odds, "
-                                 "book_odds, ev, status, took_odds FROM picks WHERE mode <> 'sim' ORDER BY id DESC LIMIT 300")).fetchall()
+                                 "book_odds, ev, status, took_odds, event_id FROM picks WHERE mode <> 'sim' ORDER BY id DESC LIMIT 300")).fetchall()
         return [canon_bb(r) for r in rows]
 
 
@@ -94,7 +94,7 @@ def canon_kv(sport, p, m):
     pm = last.get("pmap") or {}
     if k in pm:
         close = float(pm[k])
-    return dict(sport=sport, id=p["id"], key="%s:%s" % (sport, p["id"]), mkey=p.get("mkey"), lname=p.get("lname", ""), home=p.get("home", ""),
+    return dict(sport=sport, id=p["id"], key="%s:%s" % (sport, p["id"]), pkey=k, mkey=p.get("mkey"), lname=p.get("lname", ""), home=p.get("home", ""),
                 away=p.get("away", ""), tip=_epoch(p.get("tip")), created=_epoch(p.get("created")), desc=p.get("desc", ""), odds=float(p.get("odds") or 0),
                 p=float(p.get("p") or 0), fair=float(p.get("fair") or 0), ev=float(p.get("ev") or 0), status=p.get("status", "new"),
                 took=p.get("took"), ret=p.get("ret"), settled=p.get("settled"), hist=hist, stale=bool(last.get("stale")), close=close,
@@ -114,8 +114,25 @@ def canon_match(sport, m):
                 engine_keys=list(m.get("play_keys") or []))
 
 
+def bb_desc(market, sel, line, home, away):
+    """Plain wording for a basketball pick (the engine stores 'h2h home')."""
+    m, s = (market or ""), (sel or "")
+    team = home if s == "home" else away if s == "away" else s
+    try:
+        ln = float(line) if line is not None else None
+    except (TypeError, ValueError):
+        ln = None
+    if m.startswith("h2h"):
+        return "%s to win" % team
+    if m.startswith("spreads") and ln is not None:
+        return "%s %+g" % (team, ln if s == "home" else -ln)
+    if m.startswith("totals") and ln is not None:
+        return "%s %g points" % (s.title(), ln)
+    return ("%s %s %s" % (m, s, line if line is not None else "")).strip()
+
+
 def canon_bb(r):
-    pid, created, league, home, away, commence, market, sel, line, fair, minodds, bodds, ev, status, took = r
+    pid, created, league, home, away, commence, market, sel, line, fair, minodds, bodds, ev, status, took, event_id = r
     fair = float(fair or 0)
     odds = float(took or bodds or 0)
     ret = None
@@ -125,8 +142,8 @@ def canon_bb(r):
         ret = -1.0
     elif status == "void":
         ret = 0.0
-    return dict(sport="basketball", id=pid, key="basketball:%s" % pid, mkey=None, lname=league or "", home=home or "", away=away or "",
-                tip=_epoch(commence), created=_epoch(created), desc=("%s %s %s" % (market, sel, line if line is not None else "")).strip(),
+    return dict(sport="basketball", id=pid, key="basketball:%s" % pid, pkey=None, mkey=str(event_id or "%s|%s" % (home, away)), lname=league or "", home=home or "", away=away or "",
+                tip=_epoch(commence), created=_epoch(created), desc=bb_desc(market, sel, line, home or "", away or ""),
                 odds=float(bodds or 0), p=(1.0 / fair if fair > 1 else 0.0), fair=fair, ev=float(ev or 0), status=status or "new", took=took,
                 ret=ret, hist=[], stale=False, close=None, n_checks=0, min_odds=float(minodds or 0))
 

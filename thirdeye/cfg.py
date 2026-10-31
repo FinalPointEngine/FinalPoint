@@ -22,15 +22,15 @@ def f(name: str, default: float) -> float:
 
 
 def approve() -> float:
-    return f("TE_APPROVE", 65)
+    return f("TE_APPROVE", 75)
 
 
 def reduce_() -> float:
-    return f("TE_REDUCE", 50)
+    return f("TE_REDUCE", 55)
 
 
 def watch() -> float:
-    return f("TE_WATCH", 35)
+    return f("TE_WATCH", 40)
 
 
 def poll_sec() -> float:

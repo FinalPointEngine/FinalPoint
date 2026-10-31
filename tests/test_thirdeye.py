@@ -78,7 +78,8 @@ def test_alert_once_and_scoreboard():
     eye.tick()
     assert sent == []                                                      # no separate message per verdict
     card = cards.puts["te_day:football:1"]
-    assert "FOOTBALL THIRDEYE · FINAL VERDICT" in card and "Pick 1:" in card and "APPROVED" in card and "Action:" in card and "++++" in card
+    assert "THIRDEYE PRIVATE · NEON ENGINE OUTPUT" in card and "SPORT: FOOTBALL" in card and "THIRDEYE MARKETS:" in card and "THEBEAST MARKETS:" in card
+    assert "COMPARISON:" in card and "FINAL:" in card and "AGREED" in card
     # settle: won at 2.0
     r.picks = [pick(status="won", ret=1.0, tip=NOW - 7200)]
     eye.tick()
@@ -165,7 +166,7 @@ def test_day_card_shows_own_calls_not_the_no_bet_list_and_splits_pages():
     eye.tick()
     assert len(cards.puts) >= 2                                   # 120 calls do not fit one card
     page1 = cards.puts["te_day:football:1"]
-    assert "Pick 1:" in page1 and "ThirdEye own call" in page1 and "Over 2.5" in page1 and "no edge" not in page1 and "re-priced" not in page1
+    assert "Over 2.5 @ 2.00 · Score" in page1 and "TE Yes | TB - | -" in page1 and "no edge" not in page1 and "FINAL: Play ThirdEye markets. TheBeast: no pick." in page1
     assert "page 2" in cards.puts["te_day:football:2"]
     assert all(len(x) < 4000 for x in cards.puts.values())
     assert eye.find_match("home1")
@@ -208,14 +209,27 @@ def test_verdict_given_before_the_game_is_not_rewritten_afterwards():
 
 
 def test_card_layout_matches_the_agreed_format():
-    r = FakeReader("handball", [pick(sport="handball", key="handball:1", desc="Under 62.5 goals", odds=1.9, ev=0.073, home="TV Grosswallstadt",
-                                     away="VfL Potsdam", mkey="h1")])
+    p1 = pick(sport="handball", key="handball:1", desc="Under 62.5 goals", odds=1.9, ev=0.073, home="TV Grosswallstadt", away="VfL Potsdam", mkey="h1",
+              pkey="total|62.5|under")
+    r = FakeReader("handball", [p1])
+    m = match(1, sport="handball", key="h1", home="TV Grosswallstadt", away="VfL Potsdam")
+    ck = dict(t=NOW - 600, pmap={"total|62.5|under": 0.56, "total|62.5|over": 0.44}, omap={"total|62.5|under": [1.9, 0.05], "total|62.5|over": [1.9, 0.05]})
+    m["checks"] = [dict(ck, t=NOW - 1800), dict(ck, t=NOW - 1200), ck]
+    m["engine_keys"] = ["total|62.5|under"]
+    r.matches = [m]
     cards = FakeCards()
     eye, _, _ = mk({"handball": r}, cards)
     eye.tick()
     card = cards.puts["te_day:handball:1"]
-    assert card.startswith("\U0001F441 <b>HANDBALL THIRDEYE · FINAL VERDICT: ")
-    for part in ("Pick 1:", "TV Grosswallstadt\nVfL Potsdam", "Under 62.5 goals</b> @ <b>1.90</b> · engine edge +7.3%", "Kick-off", "<b>Why</b>"):
-        assert part in card
+    for part in ("THIRDEYE PRIVATE · NEON ENGINE OUTPUT", "SPORT: HANDBALL", "TV Grosswallstadt vs VfL Potsdam", "Kick-off:", "THIRDEYE MARKETS:", "THEBEAST MARKETS:",
+                 "Under 62.5 goals @ 1.90 · Edge +7.3%", "COMPARISON:", "TE Yes | TB Yes | AGREED", "FINAL: Play ThirdEye markets. TheBeast: agreed."):
+        assert part in card, part
     from thirdeye.engine import ordinal
     assert [ordinal(n) for n in (1, 2, 3, 11, 22, 31)] == ["1st", "2nd", "3rd", "11th", "22nd", "31st"]
+
+
+def test_tiers_and_disagreement():
+    eye, _, _ = mk({})
+    assert eye.tier(80) == ("AGREED", "STRONG") and eye.tier(60) == ("AGREED", "WEAK") and eye.tier(45)[0] == "INDIFFERENT" and eye.tier(20)[0] == "DISAGREED"
+    assert verdict.judge(pick(ev=0.049), NOW)["score"] >= 55            # a real 4.9% edge is not rejected
+    assert verdict.judge(pick(ev=-0.02), NOW)["score"] < 40             # a negative edge is disagreed

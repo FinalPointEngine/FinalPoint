@@ -11,11 +11,13 @@ def r_edge(p):
         return -25, "Edge %+.1f%% is too good to be true (likely a stale price or wrong match)" % (ev * 100)
     if ev > 0.15:
         return -10, "Edge %+.1f%% is unusually large: treated with suspicion" % (ev * 100)
-    if ev >= 0.10:
-        return 5, "Edge %+.1f%%: strong" % (ev * 100)
     if ev >= 0.06:
-        return 10, "Edge %+.1f%%: healthy" % (ev * 100)
-    return 0, "Edge %+.1f%%: thin" % (ev * 100)
+        return 20, "Edge %+.1f%%: strong" % (ev * 100)
+    if ev >= 0.03:
+        return 8, "Edge %+.1f%%: real but modest" % (ev * 100)
+    if ev >= 0:
+        return -5, "Edge %+.1f%%: not enough value" % (ev * 100)
+    return -30, "Edge %+.1f%%: negative, no value" % (ev * 100)
 
 
 def r_persistence(p):
@@ -107,6 +109,8 @@ def r_exposure(p, open_same_match, open_sport):
 
 
 def veto(p):
+    if p.get("dup_of"):
+        return "Same bet as pick #%s (the engine sent it twice)" % p["dup_of"]
     if p["odds"] and p["odds"] < 1.2:
         return "Odds too short to matter"
     if 0 < p["p"] < 0.25:

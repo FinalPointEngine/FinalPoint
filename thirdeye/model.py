@@ -48,27 +48,52 @@ def own_probs(omap, pmap):
     return out
 
 
-def call_for(m, now):
-    """ThirdEye's single best call for a match, or None. m = canonical match with 'checks' (t, pmap, omap)."""
-    chk = [c for c in m.get("checks", []) if c.get("omap") and c.get("pmap")]
+def _score(m, chk, k, probs, now):
+    pp, ps, pt = probs[k]
+    odds, margin = chk[-1]["omap"][k]
+    ev = pt * odds - 1.0
+    hist = [[c["t"], c["pmap"][k]] for c in chk if k in c["pmap"]]
+    pick = dict(ev=ev, p=pt, odds=odds, hist=hist, n_checks=len(chk), tip=m["tip"], status="new", stale=m.get("stale", False), close=pp, took=None)
+    j = verdict.judge(pick, now)
+    return dict(key=k, odds=odds, margin=margin, ev=ev, p=pt, p_pin=pp, p_sporty=ps, label=j["label"], score=j["score"], mult=j["mult"],
+                reasons=j["reasons"], desc=describe(k, m["home"], m["away"]), n=len(hist))
+
+
+def _chk(m):
+    return [c for c in m.get("checks", []) if c.get("omap") and c.get("pmap")]
+
+
+def calls_for(m, now, n=3):
+    """ThirdEye's own markets for a match: best selection per market family that passes its own gates, top n by score."""
+    chk = _chk(m)
     if not chk or m["tip"] < now:
-        return None
-    last = chk[-1]
-    probs = own_probs(last["omap"], last["pmap"])
-    best = None
-    for k, (pp, ps, pt) in probs.items():
-        odds, margin = last["omap"][k]
-        ev = pt * odds - 1.0
+        return []
+    probs = own_probs(chk[-1]["omap"], chk[-1]["pmap"])
+    best = {}
+    for k in probs:
+        odds, margin = chk[-1]["omap"][k]
+        ev = probs[k][2] * odds - 1.0
         if not (cfg.f("TE_MIN_EV", 0.03) <= ev <= cfg.f("TE_MAX_EV", 0.15)) or margin > cfg.f("TE_MAX_MARGIN", 0.10):
             continue
-        if odds > cfg.f("TE_MAX_ODDS", 5.0) or pt < cfg.f("TE_MIN_P", 0.35) or k.split("|")[2] == "draw":
+        if odds > cfg.f("TE_MAX_ODDS", 5.0) or probs[k][2] < cfg.f("TE_MIN_P", 0.35) or k.split("|")[2] == "draw":
             continue
-        hist = [[c["t"], c["pmap"][k]] for c in chk if k in c["pmap"]]
-        pick = dict(ev=ev, p=pt, odds=odds, hist=hist, n_checks=len(chk), tip=m["tip"], status="new", stale=m.get("stale", False),
-                    close=pp, took=None)
-        j = verdict.judge(pick, now)
-        cand = dict(key=k, odds=odds, margin=margin, ev=ev, p=pt, p_pin=pp, p_sporty=ps, label=j["label"], score=j["score"],
-                    mult=j["mult"], reasons=j["reasons"], desc=describe(k, m["home"], m["away"]), n=len(hist))
-        if best is None or (cand["score"], cand["ev"]) > (best["score"], best["ev"]):
-            best = cand
-    return best
+        c = _score(m, chk, k, probs, now)
+        fam = k.split("|")[0]
+        if fam not in best or (c["score"], c["ev"]) > (best[fam]["score"], best[fam]["ev"]):
+            best[fam] = c
+    out = [c for c in best.values() if c["score"] >= cfg.reduce_()]
+    return sorted(out, key=lambda c: (-c["score"], -c["ev"]))[:n]
+
+
+def call_for(m, now):
+    cs = calls_for(m, now, 1)
+    return cs[0] if cs else None
+
+
+def review(m, key, now):
+    """ThirdEye's own score for ONE exact market (used to review the engine's pick); None when it has no price data for it."""
+    chk = _chk(m)
+    if not chk or not key:
+        return None
+    probs = own_probs(chk[-1]["omap"], chk[-1]["pmap"])
+    return _score(m, chk, key, probs, now) if key in probs else None

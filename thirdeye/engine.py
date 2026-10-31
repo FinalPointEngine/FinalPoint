@@ -21,6 +21,10 @@ class Eye:
         self.readers, self.send, self._now, self.cards = readers, send, now, cards
         self.st = Store(load, save)
         self.status = {}        # sport -> dict(picks=n, error=str|None, at=t)
+        if self.st.meta.get("rev") != 7:                 # rules fixed: judge the backfilled history again, once
+            for k in [k for k, v in self.st.v.items() if v.get("silent") or v["sport"] == "basketball"]:
+                del self.st.v[k]
+            self.st.meta["rev"] = 7
         self.paused = False
         self.last_cycle = 0.0
 
@@ -48,7 +52,11 @@ class Eye:
                     open_n += 1
                     open_by_match[p["mkey"] or p["key"]] = open_by_match.get(p["mkey"] or p["key"], 0) + 1
             rec = self.record(key)
+            seen_bet = {}
             for p in sorted(picks, key=lambda x: x["id"]):
+                bet = (p["mkey"] or p["key"], p["desc"])
+                p["dup_of"] = seen_bet.get(bet)
+                seen_bet.setdefault(bet, p["id"])
                 self._one(p, now, rec, open_by_match, open_n, backfill_ok=True)
             try:
                 self._day_card(key, rd, now)
@@ -77,11 +85,11 @@ class Eye:
                 self._mark_done(v, p, now)
             v["locked"] = True
             return
-        j_now = now if live else min(now, p["created"] or now)
+        j_now = now if live else (p["tip"] - 3600 if p["tip"] else now)    # history: judged as it would have looked an hour before the game
         same = max(0, open_by_match.get(p["mkey"] or p["key"], 1) - 1)
         j = verdict.judge(p, j_now, rec, same, open_n)
         if v is None:
-            v = dict(key=p["key"], mkey=p.get("mkey"), sport=p["sport"], id=p["id"], lname=p["lname"], home=p["home"], away=p["away"], desc=p["desc"], odds=p["odds"],
+            v = dict(key=p["key"], history=not live, pkey=p.get("pkey"), mkey=p.get("mkey"), sport=p["sport"], id=p["id"], lname=p["lname"], home=p["home"], away=p["away"], desc=p["desc"], odds=p["odds"],
                      ev=p["ev"], tip=p["tip"], first=j["label"], seen=now, silent=not live)
             self.st.v[p["key"]] = v
             v.update(label=j["label"], score=j["score"], mult=j["mult"], reasons=j["reasons"], status=p["status"], ret=p["ret"], close=p["close"])
@@ -111,7 +119,8 @@ class Eye:
     def rec_of(self, v):
         """Card record of an engine pick with its ThirdEye verdict."""
         return dict(kind="engine", t=v["tip"], sport=v["sport"], id=v["id"], home=v["home"], away=v["away"], desc=v["desc"], odds=v["odds"], ev=v["ev"],
-                    p=None, label=v["label"], score=v["score"], reasons=v["reasons"], status=v["status"], ret=v.get("ret"), bad=v.get("bad"))
+                    p=None, label=v["label"], score=v["score"], reasons=v["reasons"], status=v["status"], ret=v.get("ret"), bad=v.get("bad"),
+                    history=v.get("history"))
 
     def alert_text(self, v, head="FINAL VERDICT"):
         """One verdict in the daily-card layout (used by /why)."""
@@ -162,58 +171,66 @@ class Eye:
         return True
 
     # ---------------------------------------------------------------- daily match cards
-    def own_call(self, m, now):
-        """ThirdEye's own model call for a match; the first sighting of each selection is kept for CLV."""
-        c = model.call_for(m, now)
-        if not c:
-            return None
-        k = "%s:%s:%s" % (m["sport"], m["key"], c["key"])
-        rec = self.st.calls.get(k)
-        if rec is None:
-            rec = self.st.calls[k] = dict(sport=m["sport"], desc=c["desc"], odds0=c["odds"], label0=c["label"], score0=c["score"], t0=now,
-                                          tip=m["tip"], home=m["home"], away=m["away"])
-        if m["tip"] > now and m["checks"]:
-            pm = m["checks"][-1]["pmap"]
-            if c["key"] in pm:
-                rec["close"] = pm[c["key"]]
-        return c
+    def own_calls(self, m, now):
+        """ThirdEye's own markets for a match; the first sighting of each selection is kept for CLV."""
+        cs = model.calls_for(m, now)
+        for c in cs:
+            k = "%s:%s:%s" % (m["sport"], m["key"], c["key"])
+            rec = self.st.calls.get(k)
+            if rec is None:
+                rec = self.st.calls[k] = dict(sport=m["sport"], desc=c["desc"], odds0=c["odds"], label0=c["label"], score0=c["score"], t0=now,
+                                              tip=m["tip"], home=m["home"], away=m["away"])
+            if m["tip"] > now and m["checks"] and c["key"] in m["checks"][-1]["pmap"]:
+                rec["close"] = m["checks"][-1]["pmap"][c["key"]]
+        return cs
 
-    def _items(self, sport, rd, now, day):
-        """Everything ThirdEye says about today's matches of one sport: engine picks with its verdict, plus its own calls."""
-        items = {}
-        for v in self.st.v.values():
-            if v["sport"] == sport and local(v["tip"]).strftime("%Y%m%d") == day:
-                items["e:%s" % v["id"]] = self.rec_of(v)
+    def tier(self, score):
+        if score >= cfg.approve():
+            return "AGREED", "STRONG"
+        if score >= cfg.reduce_():
+            return "AGREED", "WEAK"
+        if score >= cfg.watch():
+            return "INDIFFERENT", ""
+        return "DISAGREED", ""
+
+    def _groups(self, sport, rd, now, day):
+        """Per match: ThirdEye's own markets and the engine's picks with ThirdEye's review of each."""
         snap = self.st.day.setdefault(day, {}).setdefault(sport, {})
+        by_key = {m["key"]: m for m in rd.matches}
         for m in rd.matches:
-            if local(m["tip"]).strftime("%Y%m%d") != day:
+            if local(m["tip"]).strftime("%Y%m%d") != day or m["tip"] <= now:
                 continue
-            if m["tip"] > now:
-                c = self.own_call(m, now)
-                if c and c["label"] != "REJECT" and c["key"] not in m.get("engine_keys", []):
-                    snap["o:" + m["key"]] = dict(kind="own", t=m["tip"], sport=sport, id=None, home=m["home"], away=m["away"], desc=c["desc"],
-                                                 odds=c["odds"], ev=c["ev"], p=c["p"], label=c["label"], score=c["score"], reasons=c["reasons"],
-                                                 status="new", ret=None, bad=None)
-                else:
-                    snap.pop("o:" + m["key"], None)               # the call was withdrawn
-        for k, r in snap.items():
-            items[k] = r
-        return items
+            own = [dict(key=c["key"], desc=c["desc"], odds=c["odds"], ev=c["ev"], score=c["score"]) for c in self.own_calls(m, now)]
+            snap[m["key"]] = dict(t=m["tip"], home=m["home"], away=m["away"], own=own)
+        groups = {k: dict(g, eng=[]) for k, g in snap.items()}
+        for v in self.st.v.values():
+            if v["sport"] != sport or local(v["tip"]).strftime("%Y%m%d") != day:
+                continue
+            g = groups.setdefault(v["mkey"] or v["key"], dict(t=v["tip"], home=v["home"], away=v["away"], own=[], eng=[]))
+            m, score, status = by_key.get(v["mkey"]), v["score"], None
+            if v.get("history"):
+                status = "NO REVIEW"
+            elif v["tip"] > now and m:
+                rv = model.review(m, v.get("pkey"), now)
+                score = rv["score"] if rv else v["score"]
+            st, strength = self.tier(score) if not status else (status, "")
+            g["eng"].append(dict(id=v["id"], pkey=v.get("pkey"), desc=v["desc"], odds=v["odds"], ev=v["ev"], score=score, status=st, strength=strength,
+                                 result=v["status"] if v["status"] in DONE else None, ret=v.get("ret"), bad=v.get("bad")))
+        return {k: g for k, g in groups.items() if g["own"] or g["eng"]}
 
     def _day_card(self, sport, rd, now):
         if not self.cards:
             return
         day = local(now).strftime("%Y%m%d")
-        items = self._items(sport, rd, now, day)
+        groups = self._groups(sport, rd, now, day)
         for k in [k for k in self.st.day if k < day]:
             del self.st.day[k]
         for k in [k for k, v in self.st.calls.items() if v["tip"] < now - 3 * 86400]:
             del self.st.calls[k]
-        rows = sorted(items.values(), key=lambda r: (r["t"], r["kind"] != "engine", r["id"] or 0))
-        if not rows:
+        if not groups:
             return
-        lab = dict((k, l) for k, l, _, _ in cfg.SPORTS).get(sport, sport)
-        pages = cards_pages(lab, local(now), rows, now)
+        rows = sorted(groups.values(), key=lambda g: g["t"])
+        pages = cards_pages(sport, local(now), rows)
         for i, text in enumerate(pages, 1):
             key = "te_day:%s:%d" % (sport, i)
             reply = self.cards.get("te_day:%s:%d" % (sport, i - 1)).get("msg_id") if i > 1 else None
@@ -234,16 +251,18 @@ class Eye:
                     pos=sum(1 for v in cs if v["close"] * v["odds0"] - 1 > 0))
 
     def find_match(self, q):
+        """Match blocks of today's cards whose teams contain q: [(sport, html)]."""
         q = q.strip().lower()
         day = local(self._now()).strftime("%Y%m%d")
         out = []
-        for sport, ms in self.st.day.get(day, {}).items():
-            for r in ms.values():
-                if q in (r["home"] + " " + r["away"]).lower():
-                    out.append((sport, r))
-        for v in self.st.v.values():
-            if v["sport"] and local(v["tip"]).strftime("%Y%m%d") == day and q in (v["home"] + " " + v["away"]).lower():
-                out.append((v["sport"], self.rec_of(v)))
+        for sport, rd in self.readers.items():
+            try:
+                groups = self._groups(sport, rd, self._now(), day)
+            except Exception:
+                continue
+            for g in groups.values():
+                if q in (g["home"] + " " + g["away"]).lower():
+                    out.append((sport, match_block(sport, g)))
         return out
 
 
@@ -274,19 +293,53 @@ def verdict_block(r, n, now):
         out.append("Action: <b>%s</b> · %s" % (STAKE[r["label"]], who))
     out.append("Kick-off %s" % local(r["t"]).strftime("%a %H:%M"))
     out += ["", "<b>Why</b>"] + ["• " + e(x) for x in r["reasons"][:5]]
+    if r.get("history"):
+        out.append("<i>Judged after the fact (this pick was already in the engine's database before ThirdEye saw it).</i>")
     return "\n".join(out)
 
 
-def cards_pages(label, dt, rows, now, limit=3400):
-    day = "%s, %s %s %d" % (dt.strftime("%A"), ordinal(dt.day), dt.strftime("%B"), dt.year)
-    first = ["\U0001F441 <b>%s THIRDEYE · FINAL VERDICT: %s</b>" % (label.upper(), day), "━" * 15]
-    pages, cur, size, n = [], list(first), 120, 0
-    for r in rows:
-        n += 1
-        block = verdict_block(r, n, now) + "\n" + SEP
-        if size + len(block) > limit and len(cur) > len(first):
+EMOJI = {"basketball": "\U0001F3C0", "football": "⚽", "tennis": "\U0001F3BE", "hockey": "\U0001F3D2", "afootball": "\U0001F3C8",
+         "handball": "\U0001F93E", "volleyball": "\U0001F3D0"}
+RULE = "━" * 22
+
+
+def match_block(sport, g):
+    import html
+    e = html.escape
+    em = EMOJI.get(sport, "")
+    own, eng = g["own"], g["eng"]
+    out = ["%s <b>%s vs %s</b>" % (em, e(g["home"]), e(g["away"])), "⏰ Kick-off: %s" % local(g["t"]).strftime("%a %H:%M"), "", "\U0001F441 <b>THIRDEYE MARKETS:</b>"]
+    out += ["%d. %s @ %.2f · Score %d/100 · Edge %+.1f%%" % (i, e(c["desc"]), c["odds"], c["score"], c["ev"] * 100) for i, c in enumerate(own, 1)] or ["None."]
+    out += ["", "\U0001F43A <b>THEBEAST MARKETS:</b>"]
+    out += ["%d. %s @ %.2f · Edge %+.1f%%%s" % (i, e(c["desc"]), c["odds"], c["ev"] * 100,
+            (" · %s %+.2f" % (c["result"].upper(), c.get("ret") or 0)) if c.get("result") else "") for i, c in enumerate(eng, 1)] or ["None."]
+    rows, seen = [], set()
+    for c in own:
+        tb = next((x for x in eng if x["pkey"] == c["key"]), None)
+        seen.add(c["key"])
+        rows.append(("%s @ %.2f" % (c["desc"][:22], c["odds"]), "Yes", "Yes" if tb else "-", ("%s%s" % (tb["status"], " " + tb["strength"] if tb["strength"] else "")) if tb else "-"))
+    for x in eng:
+        if x["pkey"] in seen:
+            continue
+        rows.append(("%s @ %.2f" % (x["desc"][:22], x["odds"]), "Yes" if x["status"] == "AGREED" else "No", "Yes",
+                     "%s%s" % (x["status"], " " + x["strength"] if x["strength"] else "")))
+    out += ["", "⚖️ <b>COMPARISON:</b>", "<pre>" + "\n".join("%s\n  TE %s | TB %s | %s" % (e(a), b, c, d) for a, b, c, d in rows) + "</pre>"]
+    agreed = sum(1 for x in eng if x["status"] == "AGREED")
+    tb = "no pick" if not eng else ("agreed" if agreed == len(eng) else ("partially agreed" if agreed else "disagreed"))
+    out.append("\U0001F3AF <b>FINAL: %s TheBeast: %s.</b>" % ("Play ThirdEye markets." if any(r[1] == "Yes" for r in rows) else "No ThirdEye market.", tb))
+    return "\n".join(out)
+
+
+def cards_pages(sport, dt, rows, limit=3500):
+    lab = dict((k, l) for k, l, _, _ in cfg.SPORTS).get(sport, sport)
+    head = ["\U0001F441 <b>THIRDEYE PRIVATE · NEON ENGINE OUTPUT</b>", "\U0001F4C5 %s, %d %s %d" % (dt.strftime("%A"), dt.day, dt.strftime("%b"), dt.year), RULE, "",
+            "%s <b>SPORT: %s</b>" % (EMOJI.get(sport, ""), lab.upper()), RULE, ""]
+    pages, cur, size = [], list(head), 220
+    for g in rows:
+        block = match_block(sport, g) + "\n" + RULE + "\n"
+        if size + len(block) > limit and len(cur) > len(head):
             pages.append("\n".join(cur))
-            cur, size = ["\U0001F441 <b>%s THIRDEYE · FINAL VERDICT</b> (page %d)" % (label.upper(), len(pages) + 1), "━" * 15], 80
+            cur, size = ["\U0001F441 <b>THIRDEYE · %s</b> (page %d)" % (lab.upper(), len(pages) + 1), RULE, ""], 80
         cur.append(block)
         size += len(block) + 1
     pages.append("\n".join(cur))

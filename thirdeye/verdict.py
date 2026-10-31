@@ -14,6 +14,10 @@ def judge(p, now, rec=None, open_same_match=0, open_sport=0):
         if why:
             reasons.append((pts, why))
     score = max(0.0, min(100.0, score))
+    if p["ev"] < 0:                       # no value: never better than DISAGREED, whatever else looks good
+        score = min(score, cfg.watch() - 1)
+    elif p["ev"] < 0.03:                  # under 3%: not enough value, never better than INDIFFERENT
+        score = min(score, cfg.reduce_() - 1)
     v = rules.veto(p)
     if v:
         label, reasons = "REJECT", [(-99, v)] + reasons

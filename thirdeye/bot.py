@@ -83,9 +83,8 @@ class EyeBot:
         if not hits:
             return "No match with that name on today's ThirdEye cards."
         out = []
-        from thirdeye.engine import verdict_block
-        for sport, r in hits[:4]:
-            out.append("<b>%s</b>\n%s" % (html.escape(sport.upper()), verdict_block(r, None, self.eye._now())))
+        for sport, blk in hits[:3]:
+            out.append(blk)
         return Html("\n\n".join(out))
 
     def cmd_graded(self, a):
