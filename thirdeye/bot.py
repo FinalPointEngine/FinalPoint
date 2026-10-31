@@ -17,6 +17,7 @@ COMMANDS = [
     ("open", "Open picks and their verdicts"),
     ("record", "Engine alone vs engine + ThirdEye (all sports)"),
     ("sport", "Record for one sport: /sport football"),
+    ("match", "ThirdEye view of one match today: /match <team>"),
     ("graded", "Every graded pick with its verdict and reasons"),
     ("why", "Full reasoning for a pick: /why football:12"),
     ("clv", "Closing-line proxy of all picks"),
@@ -75,13 +76,24 @@ class EyeBot:
             return "Use /sport " + " | ".join(self.eye.readers)
         return Html(cards.board_card("THIRDEYE RECORD: " + k.upper(), self.eye.board(k)))
 
+    def cmd_match(self, a):
+        if not a.strip():
+            return "Use /match <team name>"
+        hits = self.eye.find_match(a)
+        if not hits:
+            return "No match with that name on today's ThirdEye cards."
+        out = []
+        for sport, r in hits[:6]:
+            out.append("<b>%s</b>\n%s" % (html.escape(sport.upper()), "\n".join(html.escape(x) for x in r["lines"])))
+        return Html("\n\n".join(out))
+
     def cmd_graded(self, a):
         from thirdeye.rules import DONE
         vs = sorted([v for v in self.eye.st.v.values() if v["status"] in DONE], key=lambda v: v["seen"])[-15:]
         out = ["<b>GRADED PICKS</b> (last %d)" % len(vs)]
         for v in vs:
             out.append("%s %s:%s %s v %s | %s @ %.2f | %s %+.2f | %s %d" % (ICON[v["label"]], v["sport"], v["id"], html.escape(v["home"]), html.escape(v["away"]),
-                       html.escape(v["desc"]), v["odds"], v["status"].upper(), v.get("ret") or 0, v["label"], v["score"]))
+                       html.escape(v["desc"]), v["odds"], v["status"].upper(), v.get("ret") or 0, v["label"], v["score"]) + (" ⚠ " + v["bad"] if v.get("bad") else ""))
             out += ["   • " + html.escape(r) for r in v["reasons"][:3]]
         return Html("\n".join(out) if vs else "No graded picks yet.")
 

@@ -44,6 +44,7 @@ class DbReader:
 
     def __init__(self, key, label, prefix, url):
         self.key, self.label, self.prefix, self.url = key, label, prefix, url
+        self.matches = []      # canonical matches from the last successful read (kv sports only)
 
     def connected(self):
         return bool(self.url)
@@ -66,6 +67,7 @@ class DbReader:
         for p in picks.values():
             m = matches.get(p.get("mkey")) or {}
             out.append(canon_kv(self.key, p, m))
+        self.matches = [canon_match(self.key, m) for m in matches.values() if isinstance(m, dict) and m.get("home")]
         return out
 
     def _basketball(self, conn):
@@ -95,8 +97,19 @@ def canon_kv(sport, p, m):
     return dict(sport=sport, id=p["id"], key="%s:%s" % (sport, p["id"]), mkey=p.get("mkey"), lname=p.get("lname", ""), home=p.get("home", ""),
                 away=p.get("away", ""), tip=_epoch(p.get("tip")), created=_epoch(p.get("created")), desc=p.get("desc", ""), odds=float(p.get("odds") or 0),
                 p=float(p.get("p") or 0), fair=float(p.get("fair") or 0), ev=float(p.get("ev") or 0), status=p.get("status", "new"),
-                took=p.get("took"), ret=p.get("ret"), hist=hist, stale=bool(last.get("stale")), close=close,
+                took=p.get("took"), ret=p.get("ret"), settled=p.get("settled"), hist=hist, stale=bool(last.get("stale")), close=close,
                 n_checks=len(m.get("checks") or []), min_odds=float(p.get("min_odds") or 0))
+
+
+def canon_match(sport, m):
+    checks = m.get("checks") or []
+    last = checks[-1] if checks else {}
+    why = last.get("why") or ""
+    if isinstance(why, list):
+        why = why[0] if why else ""
+    return dict(sport=sport, key=m.get("key") or "%s|%s" % (m.get("home"), m.get("away")), lname=m.get("lname", ""), home=m.get("home", ""),
+                away=m.get("away", ""), tip=_epoch(m.get("tip")), n_checks=len(checks), n_keys=len(last.get("keys") or []),
+                stale=bool(last.get("stale")), why=str(why)[:60], skipped=bool(m.get("skipped")))
 
 
 def canon_bb(r):
