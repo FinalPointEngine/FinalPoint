@@ -39,6 +39,10 @@ async def lifespan(app: FastAPI):
         from volleyball.runtime import VolleyballRuntime  # a separate service: own database, own Telegram bot
         _runtime = VolleyballRuntime()
         _runtime.start()
+    elif sport == "thirdeye":
+        from thirdeye.runtime import ThirdEyeRuntime    # the validator: own database, own Telegram bot, reads the 7 engines
+        _runtime = ThirdEyeRuntime()
+        _runtime.start()
     elif sport == "tennis":
         from tennis.runtime import TennisRuntime       # a separate service: own database, own Telegram bot
         _runtime = TennisRuntime()
