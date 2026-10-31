@@ -72,10 +72,13 @@ def mk(readers, cards=None):
 
 def test_alert_once_and_scoreboard():
     r = FakeReader("football", [pick()])
-    eye, sent, store = mk({"football": r})
+    cards = FakeCards()
+    eye, sent, store = mk({"football": r}, cards)
     eye.tick()
     eye.tick()
-    assert len(sent) == 1 and "APPROVE" in sent[0] and "FINAL VERDICT" in sent[0]
+    assert sent == []                                                      # no separate message per verdict
+    card = cards.puts["te_day:football:1"]
+    assert "FOOTBALL THIRDEYE · FINAL VERDICT" in card and "Pick 1:" in card and "APPROVED" in card and "Action:" in card and "++++" in card
     # settle: won at 2.0
     r.picks = [pick(status="won", ret=1.0, tip=NOW - 7200)]
     eye.tick()
@@ -162,7 +165,7 @@ def test_day_card_shows_own_calls_not_the_no_bet_list_and_splits_pages():
     eye.tick()
     assert len(cards.puts) >= 2                                   # 120 calls do not fit one card
     page1 = cards.puts["te_day:football:1"]
-    assert "150 matches re-priced" in page1 and "own call" in page1 and "Over 2.5" in page1 and "no edge" not in page1
+    assert "Pick 1:" in page1 and "ThirdEye own call" in page1 and "Over 2.5" in page1 and "no edge" not in page1 and "re-priced" not in page1
     assert "page 2" in cards.puts["te_day:football:2"]
     assert all(len(x) < 4000 for x in cards.puts.values())
     assert eye.find_match("home1")
@@ -184,7 +187,7 @@ def test_settled_pick_text_has_no_action_line():
     eye, _, _ = mk({"football": r})
     eye.tick()
     txt = eye.alert_text(eye.st.v["football:1"], "REASONING")
-    assert "Settled" in txt and "do not bet yet" not in txt and "Action:" not in txt
+    assert "Result:" in txt and "WON" in txt and "do not bet yet" not in txt and "Action:" not in txt
 
 
 def test_clv_is_not_double_counted_in_the_score():
@@ -202,3 +205,17 @@ def test_verdict_given_before_the_game_is_not_rewritten_afterwards():
     eye.tick()
     v = eye.st.v["football:1"]
     assert (v["label"], v["score"]) == before and v["status"] == "lost"
+
+
+def test_card_layout_matches_the_agreed_format():
+    r = FakeReader("handball", [pick(sport="handball", key="handball:1", desc="Under 62.5 goals", odds=1.9, ev=0.073, home="TV Grosswallstadt",
+                                     away="VfL Potsdam", mkey="h1")])
+    cards = FakeCards()
+    eye, _, _ = mk({"handball": r}, cards)
+    eye.tick()
+    card = cards.puts["te_day:handball:1"]
+    assert card.startswith("\U0001F441 <b>HANDBALL THIRDEYE · FINAL VERDICT: ")
+    for part in ("Pick 1:", "TV Grosswallstadt\nVfL Potsdam", "Under 62.5 goals</b> @ <b>1.90</b> · engine edge +7.3%", "Kick-off", "<b>Why</b>"):
+        assert part in card
+    from thirdeye.engine import ordinal
+    assert [ordinal(n) for n in (1, 2, 3, 11, 22, 31)] == ["1st", "2nd", "3rd", "11th", "22nd", "31st"]
