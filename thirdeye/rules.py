@@ -80,8 +80,6 @@ def r_timing(p, now):
     left = p["tip"] - now
     if p["tip"] and left < 0:
         return -30, "Kick-off has passed"
-    if p["tip"] and left < 600:
-        return -8, "Less than 10 minutes to start: hard to act on"
     return 0, None
 
 
@@ -101,7 +99,7 @@ def r_exposure(p, open_same_match, open_sport):
     if open_same_match:
         pts -= 10
         why.append("%d other pick(s) on this match are correlated" % open_same_match)
-    if open_sport > 8:
+    if open_sport > 12:
         pts -= 5
         why.append("%d open picks in this sport" % open_sport)
     return pts, ("Exposure: " + "; ".join(why)) if why else None

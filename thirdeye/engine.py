@@ -44,7 +44,7 @@ class Eye:
                 continue
             open_by_match, open_n = {}, 0
             for p in picks:
-                if p["status"] in ("new", "placed"):
+                if p["status"] in ("new", "placed") and now < p["tip"] < now + 24 * 3600:   # only games still to come
                     open_n += 1
                     open_by_match[p["mkey"] or p["key"]] = open_by_match.get(p["mkey"] or p["key"], 0) + 1
             rec = self.record(key)

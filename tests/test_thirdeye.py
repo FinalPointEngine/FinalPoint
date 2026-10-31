@@ -101,3 +101,13 @@ def test_graded_command_lists_reasons():
     eye.tick()
     out = EyeBot(eye).handle_text("/graded")
     assert "REJECT" in out and "WON" in out and "Edge" in out
+
+
+def test_late_pick_and_stale_open_picks_are_not_penalised():
+    late = pick(tip=NOW + 300, hist=[], n_checks=0, close=None, ev=0.10)
+    assert not any("10 minutes" in w for w in verdict.judge(late, NOW)["reasons"])
+    old_open = [pick(id=i, key="football:%d" % i, mkey="x%d" % i, tip=NOW - 99999) for i in range(30)]
+    r = FakeReader("football", old_open + [pick(id=99, key="football:99", mkey="m99")])
+    eye, _, _ = mk({"football": r})
+    eye.tick()
+    assert not any("open picks" in w for w in eye.st.v["football:99"]["reasons"])
