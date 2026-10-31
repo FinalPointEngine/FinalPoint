@@ -17,6 +17,7 @@ COMMANDS = [
     ("open", "Open picks and their verdicts"),
     ("record", "Engine alone vs engine + ThirdEye (all sports)"),
     ("sport", "Record for one sport: /sport football"),
+    ("graded", "Every graded pick with its verdict and reasons"),
     ("why", "Full reasoning for a pick: /why football:12"),
     ("clv", "Closing-line proxy of all picks"),
     ("sports", "Which engine databases are connected"),
@@ -73,6 +74,16 @@ class EyeBot:
         if k not in self.eye.readers:
             return "Use /sport " + " | ".join(self.eye.readers)
         return Html(cards.board_card("THIRDEYE RECORD: " + k.upper(), self.eye.board(k)))
+
+    def cmd_graded(self, a):
+        from thirdeye.rules import DONE
+        vs = sorted([v for v in self.eye.st.v.values() if v["status"] in DONE], key=lambda v: v["seen"])[-15:]
+        out = ["<b>GRADED PICKS</b> (last %d)" % len(vs)]
+        for v in vs:
+            out.append("%s %s:%s %s v %s | %s @ %.2f | %s %+.2f | %s %d" % (ICON[v["label"]], v["sport"], v["id"], html.escape(v["home"]), html.escape(v["away"]),
+                       html.escape(v["desc"]), v["odds"], v["status"].upper(), v.get("ret") or 0, v["label"], v["score"]))
+            out += ["   • " + html.escape(r) for r in v["reasons"][:3]]
+        return Html("\n".join(out) if vs else "No graded picks yet.")
 
     def cmd_why(self, a):
         v = self.eye.find(a) if a.strip() else None

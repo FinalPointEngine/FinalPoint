@@ -92,3 +92,12 @@ def test_rejected_pick_counts_as_held_back():
 def test_rules_card_and_thresholds():
     assert "APPROVE" in rules_card()
     assert cfg.approve() > cfg.reduce_() > cfg.watch()
+
+
+def test_graded_command_lists_reasons():
+    from thirdeye.bot import EyeBot
+    r = FakeReader("football", [pick(ev=0.35, status="won", ret=1.0, tip=NOW - 99)])
+    eye, _, _ = mk({"football": r})
+    eye.tick()
+    out = EyeBot(eye).handle_text("/graded")
+    assert "REJECT" in out and "WON" in out and "Edge" in out
