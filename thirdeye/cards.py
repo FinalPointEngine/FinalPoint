@@ -54,6 +54,8 @@ def rules_card():
              "Persistence: held 3+ checks +15, 2 checks +8, 1 check -3",
              "Fair-probability drift: up +10, down 2+ pts -20",
              "Stale Pinnacle price -15; long odds / low win chance -10",
+             "Own stats from stored results (ratings, form, rest, H2H, scoring): -15 to +8, plus 20% weight in the win chance",
+             "False noise: Pinnacle moved but ratings do not follow -10",
              "Kick-off passed -30; under 10 min -8",
              "Sport record over 20+ graded: -10 or +5",
              "Correlated picks / crowded sport -10 / -5",

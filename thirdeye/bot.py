@@ -22,6 +22,7 @@ COMMANDS = [
     ("why", "Full reasoning for a pick: /why football:12"),
     ("clv", "Closing-line proxy of all picks"),
     ("sports", "Which engine databases are connected"),
+    ("sources", "Result feeds, stored games and stats status per sport"),
     ("rules", "The ThirdEye rule set"),
     ("status", "ThirdEye health"),
     ("stop", "Pause verdicts"),
@@ -114,6 +115,16 @@ class EyeBot:
 
     def cmd_sports(self, a):
         return Html(cards.sports_card(self.eye))
+
+    def cmd_sources(self, a):
+        wh = getattr(self.eye, "wh", None)
+        if not wh:
+            return "No results history is running."
+        lines = []
+        for s, x in wh.status().items():
+            ago = ("%dm ago" % ((time.time() - x["ok"]) / 60)) if x["ok"] else "never"
+            lines.append("%s: %d games over %d days · last fetch %s%s" % (s, x["games"], x["days"], ago, (" · DOWN: " + x["err"]) if x["down"] and x["err"] else ""))
+        return Html("<b>RESULT FEEDS</b>\n" + html.escape("\n".join(lines)))
 
     def cmd_rules(self, a):
         return Html(cards.rules_card())

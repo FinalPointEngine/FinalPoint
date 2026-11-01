@@ -31,13 +31,27 @@ class ThirdEyeRuntime:
                 log.exception("cycle failed")
             self._stop.wait(cfg.poll_sec())
 
+    def _wh_loop(self, wh):
+        self._stop.wait(30)
+        while not self._stop.is_set():
+            try:
+                wh.tick()
+            except Exception:
+                log.exception("results history failed")
+            self._stop.wait(120)
+
     def start(self):
         init_db()
         from core.livecards import LiveCards
         cards_ = LiveCards(load=lambda: repo.kv_get("te_live_cards"), save=lambda v: repo.kv_set("te_live_cards", v),
                            send=lambda t, silent, reply_to=None: tg.send(t, None, reply_to, silent), edit=lambda mid, t: tg.edit(mid, t),
                            now=None)
-        self.eye = Eye(reader.build_readers(), repo.kv_get, repo.kv_set, lambda t: tg.plain(t), cards=cards_)
+        from thirdeye.stats import Stats
+        from thirdeye.warehouse import Warehouse
+        wh = Warehouse(repo.kv_get, repo.kv_set)
+        self.eye = Eye(reader.build_readers(), repo.kv_get, repo.kv_set, lambda t: tg.plain(t), cards=cards_, stats=Stats(wh))
+        self.eye.wh = wh
+        threading.Thread(target=self._wh_loop, args=(wh,), name="te-results", daemon=True).start()
         threading.Thread(target=self._loop, name="te-loop", daemon=True).start()
         if settings.TELEGRAM_TOKEN:
             self.bot = EyeBot(self.eye)

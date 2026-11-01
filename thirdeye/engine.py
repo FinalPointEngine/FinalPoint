@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from thirdeye import cfg, model, verdict
 from thirdeye.rules import DONE
+from thirdeye.stats import line as stats_line
 from thirdeye.store import Store
 
 ICON = {"APPROVE": "✅", "REDUCE": "\U0001F7E1", "WATCH": "\U0001F440", "REJECT": "⛔"}
@@ -17,8 +18,9 @@ def local(t):
 
 
 class Eye:
-    def __init__(self, readers, load, save, send, now=time.time, cards=None):
-        self.readers, self.send, self._now, self.cards = readers, send, now, cards
+    def __init__(self, readers, load, save, send, now=time.time, cards=None, stats=None):
+        self.readers, self.send, self._now, self.cards, self.stats = readers, send, now, cards, stats
+        self.wh = None
         self.st = Store(load, save)
         self.status = {}        # sport -> dict(picks=n, error=str|None, at=t)
         if self.st.meta.get("rev") != 7:                 # rules fixed: judge the backfilled history again, once
@@ -171,9 +173,12 @@ class Eye:
         return True
 
     # ---------------------------------------------------------------- daily match cards
+    def view(self, m):
+        return self.stats.view(m["sport"], m["home"], m["away"], m["tip"]) if self.stats else None
+
     def own_calls(self, m, now):
         """ThirdEye's own markets for a match; the first sighting of each selection is kept for CLV."""
-        cs = model.calls_for(m, now)
+        cs = model.calls_for(m, now, 3, self.view(m))
         for c in cs:
             k = "%s:%s:%s" % (m["sport"], m["key"], c["key"])
             rec = self.st.calls.get(k)
@@ -201,7 +206,7 @@ class Eye:
             if local(m["tip"]).strftime("%Y%m%d") != day or m["tip"] <= now:
                 continue
             own = [dict(key=c["key"], desc=c["desc"], odds=c["odds"], ev=c["ev"], score=c["score"]) for c in self.own_calls(m, now)]
-            snap[m["key"]] = dict(t=m["tip"], home=m["home"], away=m["away"], own=own)
+            snap[m["key"]] = dict(t=m["tip"], home=m["home"], away=m["away"], own=own, stats=stats_line(self.view(m)))
         groups = {k: dict(g, eng=[]) for k, g in snap.items()}
         for v in self.st.v.values():
             if v["sport"] != sport or local(v["tip"]).strftime("%Y%m%d") != day:
@@ -211,7 +216,7 @@ class Eye:
             if v.get("history"):
                 status = "NO REVIEW"
             elif v["tip"] > now and m:
-                rv = model.review(m, v.get("pkey"), now)
+                rv = model.review(m, v.get("pkey"), now, self.view(m))
                 score = rv["score"] if rv else v["score"]
             st, strength = self.tier(score) if not status else (status, "")
             g["eng"].append(dict(id=v["id"], pkey=v.get("pkey"), desc=v["desc"], odds=v["odds"], ev=v["ev"], score=score, status=st, strength=strength,
@@ -308,7 +313,7 @@ def match_block(sport, g):
     e = html.escape
     em = EMOJI.get(sport, "")
     own, eng = g["own"], g["eng"]
-    out = ["%s <b>%s vs %s</b>" % (em, e(g["home"]), e(g["away"])), "⏰ Kick-off: %s" % local(g["t"]).strftime("%a %H:%M"), "", "\U0001F441 <b>THIRDEYE MARKETS:</b>"]
+    out = ["%s <b>%s vs %s</b>" % (em, e(g["home"]), e(g["away"])), "⏰ Kick-off: %s" % local(g["t"]).strftime("%a %H:%M")] + ([e(g["stats"])] if g.get("stats") else []) + ["", "\U0001F441 <b>THIRDEYE MARKETS:</b>"]
     out += ["%d. %s @ %.2f · Score %d/100 · Edge %+.1f%%" % (i, e(c["desc"]), c["odds"], c["score"], c["ev"] * 100) for i, c in enumerate(own, 1)] or ["None."]
     out += ["", "\U0001F43A <b>THEBEAST MARKETS:</b>"]
     out += ["%d. %s @ %.2f · Edge %+.1f%%%s" % (i, e(c["desc"]), c["odds"], c["ev"] * 100,

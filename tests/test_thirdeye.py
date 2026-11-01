@@ -233,3 +233,130 @@ def test_tiers_and_disagreement():
     assert eye.tier(80) == ("AGREED", "STRONG") and eye.tier(60) == ("AGREED", "WEAK") and eye.tier(45)[0] == "INDIFFERENT" and eye.tier(20)[0] == "DISAGREED"
     assert verdict.judge(pick(ev=0.049), NOW)["score"] >= 55            # a real 4.9% edge is not rejected
     assert verdict.judge(pick(ev=-0.02), NOW)["score"] < 40             # a negative edge is disagreed
+
+
+# ------------------------------------------------------------------ results history + stats
+def sofa_ev(h, a, hs, as_, t, status="finished"):
+    return {"status": {"type": status}, "homeScore": {"current": hs}, "awayScore": {"current": as_}, "startTimestamp": t, "tournament": {"name": "L"},
+            "homeTeam": {"name": h}, "awayTeam": {"name": a}}
+
+
+def test_parsers_and_source_fallback():
+    from thirdeye import sources
+    rows = sources.parse_sofa({"events": [sofa_ev("A", "B", 2, 1, 5), sofa_ev("C", "D", 0, 0, 6, "inprogress"), {"bad": 1}]})
+    assert rows == [[5, "L", "A", "B", 2, 1]]
+    espn = {"events": [{"date": "2026-10-30T23:00Z", "competitions": [{"status": {"type": {"completed": True}}, "competitors": [
+        {"homeAway": "home", "team": {"displayName": "Celtics"}, "score": "110"}, {"homeAway": "away", "team": {"displayName": "Heat"}, "score": "100"}]}]}]}
+    assert sources.parse_espn(espn)[0][2:] == ["Celtics", "Heat", 110, 100]
+
+    def getter(url):
+        if "sofascore" in url:
+            raise RuntimeError("403")
+        return espn
+    assert sources.fetch_day("basketball", "2026-10-30", getter)[0][4] == 110          # SofaScore blocked: ESPN answers
+    try:
+        sources.fetch_day("handball", "2026-10-30", getter)
+        assert False
+    except RuntimeError:
+        pass
+
+
+def test_warehouse_backfills_persists_and_backs_off():
+    from thirdeye.warehouse import Warehouse
+    store, calls = {}, []
+
+    def fetch(sport, date):
+        calls.append((sport, date))
+        return [[1, "L", "A", "B", 1, 0]]
+    w = Warehouse(store.get, store.__setitem__, fetch, now=lambda: NOW, sports=["basketball"], pause=0)
+    w.tick(NOW)
+    assert len(calls) == 4 and len(store) == 4                       # today, yesterday + two older days
+    w.tick(NOW + 10)
+    assert len(calls) == 6                                           # two more older days; today/yesterday not refetched within the hour
+    w2 = Warehouse(store.get, store.__setitem__, fetch, now=lambda: NOW, sports=["basketball"], pause=0)
+    w2.tick(NOW + 20)
+    assert len(w2.games("basketball")) >= 4                          # restart keeps the history
+
+    def boom(sport, date):
+        raise RuntimeError("blocked")
+    w3 = Warehouse({}.get, {}.__setitem__, boom, now=lambda: NOW, sports=["tennis"], pause=0)
+    w3.tick(NOW)
+    st = w3.status(NOW)["tennis"]
+    assert st["down"] and "blocked" in st["err"]
+    n = len(w3.fail)
+    w3.tick(NOW + 5)                                                  # backed off: not hammered again
+    assert w3.fail["tennis"][0] == 1
+
+
+def league():
+    """Alpha is strong (wins by 10 at home or away); the rest are level."""
+    teams = ["Alpha", "Beta", "Gamma", "Delta", "Echo", "Foxtrot"]
+    games, t = [], NOW - 30 * 86400
+    for d in range(30):
+        for i in range(0, 6, 2):
+            h, a = teams[(i + d) % 6], teams[(i + 1 + d * 2) % 6]
+            if h == a:
+                continue
+            hg, ag = (110, 100) if h == "Alpha" else (100, 110) if a == "Alpha" else (101, 99) if d % 2 else (99, 101)
+            games.append([int(t + d * 86400 + i * 3600), "L", h, a, hg, ag])
+    return games
+
+
+def test_stats_view_probabilities_and_extras():
+    from thirdeye import stats
+    from thirdeye.warehouse import Warehouse
+    w = Warehouse({}.get, {}.__setitem__, lambda s, d: [], now=lambda: NOW, sports=["basketball"], pause=0)
+    w._loaded.add("basketball")
+    w.days["basketball"] = {"2026-01-01": league()}
+    w.version += 1
+    s = stats.Stats(w)
+    v = s.view("basketball", "Alpha", "Beta", NOW)
+    assert v and v["n_h"] >= 6 and v["exp_margin"] > 3
+    assert stats.p_for_key(v, "h2h||home", "basketball") > 0.6 and stats.p_for_key(v, "h2h||away", "basketball") < 0.4
+    assert stats.p_for_key(v, "total|205.5|over", "basketball") is not None and stats.p_for_key(v, "tennisx|1|home", "tennis") is None
+    assert s.view("basketball", "Nobody FC", "Beta", NOW) is None                                  # no history, no opinion
+    ex = stats.extras(v, "h2h||home", 0.75, 0.60, [])
+    assert any(p > 0 and "ratings" in w_.lower() for p, w_ in ex)
+    assert any(p < 0 for p, _ in stats.extras(v, "h2h||away", 0.25, 0.45, []))                       # backing the weaker side against the ratings
+    assert stats.line(v).startswith("\U0001F4CA Form")
+
+
+def test_stats_move_the_edge_and_show_on_the_card():
+    from thirdeye import stats
+    from thirdeye.warehouse import Warehouse
+    w = Warehouse({}.get, {}.__setitem__, lambda s, d: [], now=lambda: NOW, sports=["basketball"], pause=0)
+    w._loaded.add("basketball")
+    w.days["basketball"] = {"2026-01-01": league()}
+    w.version += 1
+    s = stats.Stats(w)
+    m = with_prices(match(1, sport="basketball", home="Alpha", away="Beta"))
+    ck = dict(t=NOW - 600, pmap={"h2h||home": 0.55, "h2h||away": 0.45}, omap={"h2h||home": [1.7, 0.05], "h2h||away": [2.2, 0.05]})
+    m["checks"] = [dict(ck, t=NOW - 1800), dict(ck, t=NOW - 1200), ck]
+    from thirdeye import model
+    plain = model.calls_for(m, NOW)
+    seen = model.calls_for(m, NOW, 3, s.view("basketball", "Alpha", "Beta", m["tip"]))
+    assert not plain and seen and seen[0]["key"] == "h2h||home"                                      # at 1.70 the prices alone show no edge; the ratings do
+    assert seen[0]["p_stats"] is not None and any("ratings" in x.lower() for x in seen[0]["reasons"])
+
+
+def test_card_shows_stats_line_and_sources_command():
+    from thirdeye import stats
+    from thirdeye.bot import EyeBot
+    from thirdeye.warehouse import Warehouse
+    w = Warehouse({}.get, {}.__setitem__, lambda s, d: [], now=lambda: NOW, sports=["basketball"], pause=0)
+    w._loaded.add("basketball")
+    w.days["basketball"] = {"2026-01-01": league()}
+    w.version += 1
+    m = with_prices(match(1, sport="basketball", home="Alpha", away="Beta"))
+    ck = dict(t=NOW - 600, pmap={"h2h||home": 0.55, "h2h||away": 0.45}, omap={"h2h||home": [1.7, 0.05], "h2h||away": [2.2, 0.05]})
+    m["checks"] = [dict(ck, t=NOW - 1800), dict(ck, t=NOW - 1200), ck]
+    r = FakeReader("basketball", [])
+    r.matches = [m]
+    cards = FakeCards()
+    store, sent = {}, []
+    eye = Eye({"basketball": r}, store.get, store.__setitem__, sent.append, now=lambda: NOW, cards=cards, stats=stats.Stats(w))
+    eye.wh = w
+    eye.tick()
+    card = cards.puts["te_day:basketball:1"]
+    assert "\U0001F4CA Form" in card and "Alpha to win @ 1.70" in card
+    assert "RESULT FEEDS" in EyeBot(eye).handle_text("/sources")
