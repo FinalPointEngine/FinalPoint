@@ -360,3 +360,48 @@ def test_card_shows_stats_line_and_sources_command():
     card = cards.puts["te_day:basketball:1"]
     assert "\U0001F4CA Form" in card and "Alpha to win @ 1.70" in card
     assert "RESULT FEEDS" in EyeBot(eye).handle_text("/sources")
+
+
+def test_integer_lines_use_the_same_key_as_the_engines():
+    from thirdeye import reader
+    assert reader.pkey({"mkt": "total", "line": 5.0, "sel": "under"}) == "total|5|under"
+    assert reader.pkey({"mkt": "ah", "line": -1.5, "sel": "home"}) == "ah|-1.5|home" and reader.pkey({"mkt": "ml", "line": None, "sel": "home"}) == "ml||home"
+    assert reader.pkey({"mkt": "ah", "line": 0.0, "sel": "home"}) == "ah|0|home"
+
+
+def test_one_row_when_engine_and_thirdeye_pick_the_same_market():
+    m = with_prices(match(1, sport="hockey", home="Dizel", away="Olimpiya"))
+    ck = dict(t=NOW - 600, pmap={"total|5|under": 0.63, "total|5|over": 0.37}, omap={"total|5|under": [1.74, 0.05], "total|5|over": [2.0, 0.05]})
+    m["checks"] = [dict(ck, t=NOW - 1800), dict(ck, t=NOW - 1200), ck]
+    m["engine_keys"] = ["total|5|under"]
+    p = pick(sport="hockey", key="hockey:1", mkey=m["key"], desc="Under 5 goals", odds=1.74, ev=0.096, home="Dizel", away="Olimpiya", pkey="total|5|under")
+    r = FakeReader("hockey", [p])
+    r.matches = [m]
+    cards = FakeCards()
+    eye, _, _ = mk({"hockey": r}, cards)
+    eye.tick()
+    card = cards.puts["te_day:hockey:1"]
+    assert card.count("TE Yes | TB Yes") == 1 and "TE Yes | TB - | -" not in card
+
+
+def test_sofascore_403_is_not_retried_and_new_espn_sources_parse():
+    import time as _t
+    from thirdeye import sources
+    sources._blocked["until"] = 0.0
+    calls = []
+
+    def getter(url):
+        calls.append(url)
+        if "sofascore" in url:
+            raise RuntimeError("HTTP Error 403: Forbidden")
+        return {"events": [{"date": "2026-10-30T18:00Z", "name": "Paris", "groupings": [{"competitions": [
+            {"date": "2026-10-30T18:00Z", "status": {"type": {"completed": True}}, "competitors": [
+                {"order": 1, "winner": True, "athlete": {"displayName": "A Player"}}, {"order": 2, "winner": False, "athlete": {"displayName": "B Player"}}]},
+            {"status": {"type": {"completed": True}}, "competitors": [{"order": 1, "team": {"displayName": "Doubles"}}]}]}]}]}
+    rows = sources.fetch_day("tennis", "2026-10-30", getter)
+    assert rows and all(r[1:] == ["Paris", "A Player", "B Player", 1, 0] for r in rows)       # doubles are ignored
+    n = len(calls)
+    sources.fetch_day("tennis", "2026-10-29", getter)
+    assert not any("sofascore" in u for u in calls[n:])                  # blocked: skipped for hours
+    assert sources.ESPN["football"] == ["soccer/all"]
+    sources._blocked["until"] = 0.0

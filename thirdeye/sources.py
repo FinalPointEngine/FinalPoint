@@ -3,12 +3,15 @@ Every fetch is wrapped by the caller: a blocked or changed feed just means Third
 from __future__ import annotations
 
 import json
+import time
 import urllib.request
 from datetime import datetime, timezone
 
 SLUG = {"football": "football", "basketball": "basketball", "tennis": "tennis", "hockey": "ice-hockey", "afootball": "american-football",
         "handball": "handball", "volleyball": "volleyball"}
-ESPN = {"basketball": ["basketball/nba"], "hockey": ["hockey/nhl"], "afootball": ["football/nfl"]}
+ESPN = {"basketball": ["basketball/nba"], "hockey": ["hockey/nhl"], "afootball": ["football/nfl"], "football": ["soccer/all"],
+        "tennis": ["tennis/atp", "tennis/wta"]}
+_blocked = {"until": 0.0}
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Accept": "application/json", "Referer": "https://www.sofascore.com/"}
 
@@ -51,19 +54,42 @@ def parse_espn(js):
     return rows
 
 
+def parse_espn_tennis(js):
+    """ESPN tennis: tournaments -> groupings -> matches. Sets are not given per player here, so a win is 1-0 (a rating from wins and losses)."""
+    rows = []
+    for e in (js or {}).get("events", []):
+        for gr in e.get("groupings", []) or []:
+            for c in gr.get("competitions", []) or []:
+                try:
+                    if not (c.get("status") or {}).get("type", {}).get("completed"):
+                        continue
+                    pl = sorted([x for x in c["competitors"] if x.get("athlete")], key=lambda x: x.get("order", 0))
+                    if len(pl) != 2:
+                        continue                                  # doubles or incomplete
+                    t = int(datetime.fromisoformat((c.get("date") or e["date"]).replace("Z", "+00:00")).timestamp())
+                    w0 = bool(pl[0].get("winner"))
+                    rows.append([t, e.get("name", ""), pl[0]["athlete"]["displayName"], pl[1]["athlete"]["displayName"], 1 if w0 else 0, 0 if w0 else 1])
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return rows
+
+
 def fetch_day(sport, date, getter=get_json):
     """Finished games of one sport on one UTC date -> [[t, league, home, away, hg, ag]]. Raises when every source failed."""
     err = None
     slug = SLUG.get(sport)
-    if slug:
+    if slug and time.time() >= _blocked["until"]:
         try:
             return parse_sofa(getter("https://api.sofascore.com/api/v1/sport/%s/scheduled-events/%s" % (slug, date)))
         except Exception as e:                      # blocked, changed, offline: try the fallback
             err = e
+            if "403" in str(e) or "429" in str(e):
+                _blocked["until"] = time.time() + 6 * 3600          # do not keep knocking on a door that is shut
     rows, ok = [], False
     for path in ESPN.get(sport, []):
         try:
-            rows += parse_espn(getter("https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s" % (path, date.replace("-", ""))))
+            js = getter("https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s&limit=1000" % (path, date.replace("-", "")))
+            rows += parse_espn_tennis(js) if sport == "tennis" else parse_espn(js)
             ok = True
         except Exception as e:
             err = e

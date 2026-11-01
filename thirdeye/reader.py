@@ -78,7 +78,9 @@ class DbReader:
 
 
 def pkey(p):
-    return "%s|%s|%s" % (p.get("mkt"), p.get("line") or "", p.get("sel"))
+    """Same text the engines use for a selection ('%g' line: 5.0 -> '5', None -> '')."""
+    ln = p.get("line")
+    return "%s|%s|%s" % (p.get("mkt"), "" if ln is None else "%g" % ln, p.get("sel"))
 
 
 def canon_kv(sport, p, m):
