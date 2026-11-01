@@ -22,6 +22,7 @@ COMMANDS = [
     ("why", "Full reasoning for a pick: /why football:12"),
     ("clv", "Closing-line proxy of all picks"),
     ("sports", "Which engine databases are connected"),
+    ("calib", "Do higher scores really win more? Played vs not played"),
     ("sources", "Result feeds, stored games and stats status per sport"),
     ("rules", "The ThirdEye rule set"),
     ("status", "ThirdEye health"),
@@ -115,6 +116,17 @@ class EyeBot:
 
     def cmd_sports(self, a):
         return Html(cards.sports_card(self.eye))
+
+    def cmd_calib(self, a):
+        c = self.eye.calib()
+
+        def row(x):
+            return "%d picks, won %d, %+.2f units" % (x["n"], x["won"], x["units"])
+        lines = ["TheBeast picks: " + row(c["engine"]), "ThirdEye own markets: " + row(c["own"]), "", "By ThirdEye score (TheBeast picks):"]
+        lines += ["  %s: %s" % (k, row(v)) for k, v in sorted(c["tiers"].items())] or ["  none graded yet"]
+        lines += ["", "You played: " + row(c["played"]), "You did not play: " + row(c["not_played"]), "",
+                  "Under about 30 graded picks this says very little."]
+        return Html("<b>CALIBRATION</b>\n" + html.escape("\n".join(lines)))
 
     def cmd_sources(self, a):
         wh = getattr(self.eye, "wh", None)

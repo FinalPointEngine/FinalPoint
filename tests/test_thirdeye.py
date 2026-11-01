@@ -405,3 +405,72 @@ def test_sofascore_403_is_not_retried_and_new_espn_sources_parse():
     assert not any("sofascore" in u for u in calls[n:])                  # blocked: skipped for hours
     assert sources.ESPN["football"] == ["soccer/all"]
     sources._blocked["until"] = 0.0
+
+
+# ------------------------------------------------------------------ results ledger
+def wh_with(sport, games):
+    from thirdeye.warehouse import Warehouse
+    w = Warehouse({}.get, {}.__setitem__, lambda s, d: [], now=lambda: NOW, sports=[sport], pause=0)
+    w._loaded.add(sport)
+    w.days[sport] = {"2026-01-01": [[t, "L", h, a, hg, ag] for t, h, a, hg, ag in games]}
+    w.version += 1
+    return w
+
+
+def test_ledger_finds_and_settles_like_the_engines():
+    from thirdeye import ledger
+    w = wh_with("hockey", [(NOW - 4 * 3600, "Dizel Penza", "Olimpiya Kirovo-Chepetsk", 3, 1)])
+    assert ledger.find_result(w, "hockey", "Dizel Penza", "Olimpiya Kirovo", NOW - 4 * 3600 + 600) == (3, 1)
+    assert ledger.find_result(w, "hockey", "Dizel Penza", "Olimpiya Kirovo", NOW + 86400) is None          # wrong day: not the same game
+    assert ledger.settle("hockey", "total|5|under", 1.74, 3, 1) == ("won", 0.74) or ledger.settle("hockey", "total|5|under", 1.74, 3, 1)[0] == "won"
+    assert ledger.settle("hockey", "total|3|under", 2.0, 2, 1)[0] == "void"                                 # whole-line push
+    assert ledger.settle("tennis", "ml||home", 1.8, 1, 0)[0] == "won" and ledger.settle("tennis", "total|22.5|over", 1.8, 1, 0) is None
+
+
+def test_football_pick_is_graded_by_thirdeye_and_the_card_shows_result_and_played():
+    p = pick(id=7, key="football:7", mkey="m7", pkey="total|2.5|over", desc="Over 2.5 goals", odds=2.1, took=2.1, tip=NOW - 4 * 3600, status="new",
+             home="Home7", away="Away7")
+    r = FakeReader("football", [p])
+    m = match(7, tip=NOW - 4 * 3600, home="Home7", away="Away7")
+    m["key"] = "m7"
+    r.matches = [m]
+    cards = FakeCards()
+    eye, _, _ = mk({"football": r}, cards)
+    eye.wh = wh_with("football", [(NOW - 4 * 3600, "Home7", "Away7", 2, 1)])
+    eye.tick()
+    v = eye.st.v["football:7"]
+    assert v["status"] == "won" and v["graded_by"] == "ThirdEye" and abs(v["ret"] - 1.1) < 1e-6 and isinstance(v["score"], (int, float))
+    eye.tick()                                                                              # the engine still says "new": ThirdEye's result is kept
+    assert eye.st.v["football:7"]["status"] == "won"
+    card = cards.puts["te_day:football:1"]
+    assert "RESULT: Home7 2-1 Away7" in card and "PLAYED @ 2.10" in card and "ClaudeEdge: not built yet" in card
+    c = eye.calib()
+    assert c["engine"]["n"] == 1 and c["played"]["n"] == 1 and c["not_played"]["n"] == 0
+    from thirdeye.bot import EyeBot
+    assert "CALIBRATION" in EyeBot(eye).handle_text("/calib")
+
+
+def test_own_calls_are_graded_from_results():
+    eye, _, _ = mk({"hockey": FakeReader("hockey", [])})
+    eye.wh = wh_with("hockey", [(NOW - 4 * 3600, "Dizel", "Olimpiya", 3, 1)])
+    eye.st.calls["hockey:g:total|5|under"] = dict(sport="hockey", pkey="total|5|under", odds0=1.74, tip=NOW - 4 * 3600, home="Dizel", away="Olimpiya", desc="Under 5")
+    eye.tick()
+    c = eye.st.calls["hockey:g:total|5|under"]
+    assert c["status"] == "won" and c["final"] == "3-1" and eye.calib()["own"]["n"] == 1
+
+
+def test_every_pick_is_agreed_or_disagreed_and_every_sport_gets_a_card():
+    eye, _, _ = mk({})
+    assert eye.agree(80) == ("AGREED", "STRONG") and eye.agree(60) == ("AGREED", "WEAK")
+    assert eye.agree(45) == ("DISAGREED", "borderline") and eye.agree(20) == ("DISAGREED", "")
+    old = pick(id=3, key="football:3", mkey="x", tip=NOW - 5 * 3600, status="new", hist=[], n_checks=0, close=None, ev=0.049)       # read in after the game
+    cards = FakeCards()
+    r1, r2 = FakeReader("football", [old]), FakeReader("volleyball", [])
+    r2.matches = [match(1, sport="volleyball")]
+    eye, _, _ = mk({"football": r1, "volleyball": r2}, cards)
+    eye.tick()
+    f = cards.puts["te_day:football:1"]
+    assert "NO REVIEW" not in f and "INDIFFERENT" not in f and ("AGREED" in f or "DISAGREED" in f)
+    assert "TheBeast picks: 1" in f
+    v = cards.puts["te_day:volleyball:1"]                                                   # nothing to say yet, but the card exists
+    assert "No TheBeast pick and no ThirdEye market yet today" in v and "matches analysed: 1" in v

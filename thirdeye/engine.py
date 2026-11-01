@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 
-from thirdeye import cfg, model, verdict
+from thirdeye import cfg, ledger, model, verdict
 from thirdeye.rules import DONE
 from thirdeye.stats import line as stats_line
 from thirdeye.store import Store
@@ -21,6 +21,7 @@ class Eye:
     def __init__(self, readers, load, save, send, now=time.time, cards=None, stats=None):
         self.readers, self.send, self._now, self.cards, self.stats = readers, send, now, cards, stats
         self.wh = None
+        self._res = {}
         self.st = Store(load, save)
         self.status = {}        # sport -> dict(picks=n, error=str|None, at=t)
         if self.st.meta.get("rev") != 7:                 # rules fixed: judge the backfilled history again, once
@@ -65,6 +66,11 @@ class Eye:
             except Exception:
                 import logging
                 logging.getLogger("thirdeye.engine").exception("day card %s failed", key)
+        try:
+            self.grade(now)
+        except Exception:
+            import logging
+            logging.getLogger("thirdeye.engine").exception("grading failed")
         self.st.meta["last_cycle"] = now
         self.last_cycle = now
         self.st.flush()
@@ -82,7 +88,10 @@ class Eye:
             return
         live = (not done) and p["tip"] > now
         if v and not live:      # the verdict that was live at the time stands: never re-judge a game that has started or finished
-            v.update(status=p["status"], ret=p["ret"], close=p["close"] or v.get("close"))
+            v["took"] = p.get("took")
+            if not (v.get("graded_by") and not done):          # keep a result ThirdEye settled itself until the engine settles it too
+                v.update(status=p["status"], ret=p["ret"])
+            v["close"] = p["close"] or v.get("close")
             if done and not v.get("done_at"):
                 self._mark_done(v, p, now)
             v["locked"] = True
@@ -91,7 +100,7 @@ class Eye:
         same = max(0, open_by_match.get(p["mkey"] or p["key"], 1) - 1)
         j = verdict.judge(p, j_now, rec, same, open_n)
         if v is None:
-            v = dict(key=p["key"], history=not live, pkey=p.get("pkey"), mkey=p.get("mkey"), sport=p["sport"], id=p["id"], lname=p["lname"], home=p["home"], away=p["away"], desc=p["desc"], odds=p["odds"],
+            v = dict(key=p["key"], took=p.get("took"), history=not live, pkey=p.get("pkey"), mkey=p.get("mkey"), sport=p["sport"], id=p["id"], lname=p["lname"], home=p["home"], away=p["away"], desc=p["desc"], odds=p["odds"],
                      ev=p["ev"], tip=p["tip"], first=j["label"], seen=now, silent=not live)
             self.st.v[p["key"]] = v
             v.update(label=j["label"], score=j["score"], mult=j["mult"], reasons=j["reasons"], status=p["status"], ret=p["ret"], close=p["close"])
@@ -183,7 +192,7 @@ class Eye:
             k = "%s:%s:%s" % (m["sport"], m["key"], c["key"])
             rec = self.st.calls.get(k)
             if rec is None:
-                rec = self.st.calls[k] = dict(sport=m["sport"], desc=c["desc"], odds0=c["odds"], label0=c["label"], score0=c["score"], t0=now,
+                rec = self.st.calls[k] = dict(sport=m["sport"], pkey=c["key"], desc=c["desc"], odds0=c["odds"], label0=c["label"], score0=c["score"], t0=now,
                                               tip=m["tip"], home=m["home"], away=m["away"])
             if m["tip"] > now and m["checks"] and c["key"] in m["checks"][-1]["pmap"]:
                 rec["close"] = m["checks"][-1]["pmap"][c["key"]]
@@ -197,6 +206,14 @@ class Eye:
         if score >= cfg.watch():
             return "INDIFFERENT", ""
         return "DISAGREED", ""
+
+    def agree(self, score):
+        """The card shows only AGREED or DISAGREED for a TheBeast pick: 55 and over agrees; 40-54 disagrees (borderline); under 40 disagrees."""
+        if score >= cfg.approve():
+            return "AGREED", "STRONG"
+        if score >= cfg.reduce_():
+            return "AGREED", "WEAK"
+        return "DISAGREED", ("borderline" if score >= cfg.watch() else "")
 
     def _groups(self, sport, rd, now, day):
         """Per match: ThirdEye's own markets and the engine's picks with ThirdEye's review of each."""
@@ -212,15 +229,20 @@ class Eye:
             if v["sport"] != sport or local(v["tip"]).strftime("%Y%m%d") != day:
                 continue
             g = groups.setdefault(v["mkey"] or v["key"], dict(t=v["tip"], home=v["home"], away=v["away"], own=[], eng=[]))
-            m, score, status = by_key.get(v["mkey"]), v["score"], None
-            if v.get("history"):
-                status = "NO REVIEW"
-            elif v["tip"] > now and m:
+            m, score = by_key.get(v["mkey"]), v["score"]
+            if not v.get("history") and v["tip"] > now and m:
                 rv = model.review(m, v.get("pkey"), now, self.view(m))
                 score = rv["score"] if rv else v["score"]
-            st, strength = self.tier(score) if not status else (status, "")
+            st, strength = self.agree(score)
             g["eng"].append(dict(id=v["id"], pkey=v.get("pkey"), desc=v["desc"], odds=v["odds"], ev=v["ev"], score=score, status=st, strength=strength,
-                                 result=v["status"] if v["status"] in DONE else None, ret=v.get("ret"), bad=v.get("bad")))
+                                 result=v["status"] if v["status"] in DONE else None, ret=v.get("ret"), bad=v.get("bad"), took=v.get("took")))
+        for g in groups.values():
+            r = self.result_of(sport, g["home"], g["away"], g["t"], now)
+            g["res"] = "%d-%d" % r if r else None
+            if r:
+                for c in g["own"]:
+                    s = ledger.settle(sport, c["key"], c["odds"], *r)
+                    c["result"], c["ret"] = (s[0], round(s[1], 4)) if s else (None, None)
         return {k: g for k, g in groups.items() if g["own"] or g["eng"]}
 
     def _day_card(self, sport, rd, now):
@@ -232,10 +254,11 @@ class Eye:
             del self.st.day[k]
         for k in [k for k, v in self.st.calls.items() if v["tip"] < now - 3 * 86400]:
             del self.st.calls[k]
-        if not groups:
+        analysed = sum(1 for m in rd.matches if local(m["tip"]).strftime("%Y%m%d") == day)
+        if not groups and not analysed and not self.status.get(sport, {}).get("picks"):
             return
         rows = sorted(groups.values(), key=lambda g: g["t"])
-        pages = cards_pages(sport, local(now), rows)
+        pages = cards_pages(sport, local(now), rows, analysed)
         for i, text in enumerate(pages, 1):
             key = "te_day:%s:%d" % (sport, i)
             reply = self.cards.get("te_day:%s:%d" % (sport, i - 1)).get("msg_id") if i > 1 else None
@@ -247,6 +270,44 @@ class Eye:
             self.cards.put("te_day:%s:%d" % (sport, j), "(page %d: nothing to show)" % j, day)
         self.st.meta["pages_" + sport] = len(pages)
         self.st.meta["items_" + sport] = len(rows)
+
+    def result_of(self, sport, home, away, tip, now):
+        if tip > now - 2 * 3600:
+            return None                                   # not over yet
+        return ledger.find_result(self.wh, sport, home, away, tip, self._res)
+
+    def grade(self, now):
+        """Settle what the engines have not settled (football, tennis) and ThirdEye's own calls, from ThirdEye's own results history."""
+        if not self.wh:
+            return
+        for v in self.st.v.values():
+            if v["status"] in DONE or not v.get("pkey") or v["tip"] > now - 3 * 3600 or v["tip"] < now - 3 * 86400:
+                continue
+            r = self.result_of(v["sport"], v["home"], v["away"], v["tip"], now)
+            s = ledger.settle(v["sport"], v["pkey"], v.get("took") or v["odds"], *r) if r else None
+            if s:
+                v.update(status=s[0], ret=round(s[1], 4), final="%d-%d" % r, graded_by="ThirdEye", done_at=now)
+        for c in self.st.calls.values():
+            if c.get("status") or not c.get("pkey") or c["tip"] > now - 3 * 3600:
+                continue
+            r = self.result_of(c["sport"], c["home"], c["away"], c["tip"], now)
+            s = ledger.settle(c["sport"], c["pkey"], c["odds0"], *r) if r else None
+            if s:
+                c.update(status=s[0], ret=round(s[1], 4), final="%d-%d" % r)
+
+    def calib(self):
+        """Does a higher ThirdEye score really mean better results? Played vs not played too."""
+        def agg(rows):
+            n = len(rows)
+            return dict(n=n, won=sum(1 for r in rows if r["status"] in ("won", "halfwon")), units=sum(r.get("ret") or 0 for r in rows))
+        eng = [v for v in self.st.v.values() if v["status"] in DONE and not v.get("bad")]
+        own = [c for c in self.st.calls.values() if c.get("status") in DONE]
+        tiers = {}
+        for v in eng:
+            t = self.tier(v["score"])
+            tiers.setdefault(t[0] + (" " + t[1] if t[1] else ""), []).append(v)
+        return dict(engine=agg(eng), own=agg(own), tiers={k: agg(v) for k, v in tiers.items()},
+                    played=agg([v for v in eng if v.get("took")]), not_played=agg([v for v in eng if not v.get("took")]))
 
     def call_clv(self):
         cs = [v for v in self.st.calls.values() if v.get("close") and v["tip"] < self._now()]
@@ -329,17 +390,34 @@ def match_block(sport, g):
         rows.append(("%s @ %.2f" % (x["desc"][:22], x["odds"]), "Yes" if x["status"] == "AGREED" else "No", "Yes",
                      "%s%s" % (x["status"], " " + x["strength"] if x["strength"] else "")))
     out += ["", "⚖️ <b>COMPARISON:</b>", "<pre>" + "\n".join("%s\n  TE %s | TB %s | %s" % (e(a), b, c, d) for a, b, c, d in rows) + "</pre>"]
+    if g.get("res") or any(x.get("result") for x in eng):
+        icon = {"won": "✅", "halfwon": "✅", "lost": "❌", "halflost": "❌", "void": "➖"}
+        out += ["", "\U0001F3C1 <b>RESULT: %s</b>" % e(("%s %s %s" % (g["home"], g["res"], g["away"])) if g.get("res") else "final score not found")]
+        for c in own:
+            if c.get("result"):
+                out.append("\U0001F441 %s: %s %s %+.2f" % (e(c["desc"]), icon.get(c["result"], ""), c["result"].upper(), c.get("ret") or 0))
+        for x in eng:
+            if x.get("result"):
+                out.append("\U0001F43A %s: %s %s %+.2f · %s" % (e(x["desc"]), icon.get(x["result"], ""), x["result"].upper(), x.get("ret") or 0,
+                           ("PLAYED @ %.2f" % x["took"]) if x.get("took") else "NOT PLAYED"))
+        out.append("\U0001F9E0 ClaudeEdge: not built yet")
     agreed = sum(1 for x in eng if x["status"] == "AGREED")
     tb = "no pick" if not eng else ("agreed" if agreed == len(eng) else ("partially agreed" if agreed else "disagreed"))
     out.append("\U0001F3AF <b>FINAL: %s TheBeast: %s.</b>" % ("Play ThirdEye markets." if any(r[1] == "Yes" for r in rows) else "No ThirdEye market.", tb))
     return "\n".join(out)
 
 
-def cards_pages(sport, dt, rows, limit=3500):
+def cards_pages(sport, dt, rows, analysed=0, limit=3500):
     lab = dict((k, l) for k, l, _, _ in cfg.SPORTS).get(sport, sport)
     head = ["\U0001F441 <b>THIRDEYE PRIVATE · NEON ENGINE OUTPUT</b>", "\U0001F4C5 %s, %d %s %d" % (dt.strftime("%A"), dt.day, dt.strftime("%b"), dt.year), RULE, "",
             "%s <b>SPORT: %s</b>" % (EMOJI.get(sport, ""), lab.upper()), RULE, ""]
-    pages, cur, size = [], list(head), 220
+    eng = [x for g in rows for x in g["eng"]]
+    ag = sum(1 for x in eng if x["status"] == "AGREED")
+    own_n = sum(len(g["own"]) for g in rows)
+    head.insert(-1, "TheBeast picks: %d · AGREED %d · DISAGREED %d · ThirdEye own markets: %d · matches analysed: %d" % (len(eng), ag, len(eng) - ag, own_n, analysed))
+    if not rows:
+        head.insert(-1, "No TheBeast pick and no ThirdEye market yet today. Both keep checking every match.")
+    pages, cur, size = [], list(head), 260
     for g in rows:
         block = match_block(sport, g) + "\n" + RULE + "\n"
         if size + len(block) > limit and len(cur) > len(head):
