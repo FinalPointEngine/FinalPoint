@@ -45,6 +45,8 @@ class DbReader:
     def __init__(self, key, label, prefix, url):
         self.key, self.label, self.prefix, self.url = key, label, prefix, url
         self.matches = []      # canonical matches from the last successful read (kv sports only)
+        self._raw_matches = {}  # raw matches blob, re-read at most every TE_MATCH_SEC (it is the big one: Neon bills transfer)
+        self._m_at = 0.0
 
     def connected(self):
         return bool(self.url)
@@ -62,7 +64,11 @@ class DbReader:
 
     def _kvsport(self, conn):
         picks = (_kv(conn, self.prefix + "picks") or {}).get("picks", {})
-        matches = _kv(conn, self.prefix + "matches") or {}
+        import time
+        if not self._raw_matches or time.time() - self._m_at >= cfg.f("TE_MATCH_SEC", 900):
+            self._raw_matches = _kv(conn, self.prefix + "matches") or {}
+            self._m_at = time.time()
+        matches = self._raw_matches
         out = []
         for p in picks.values():
             m = matches.get(p.get("mkey")) or {}

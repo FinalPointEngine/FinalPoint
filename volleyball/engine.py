@@ -284,6 +284,11 @@ class Engine:
                     chk["change"].append("SportyBet %s %.2f to %.2f." % (sel, a, b))
         return self._finish(m, chk, slot)
 
+    def _fp(self, m, text):
+        """The match card also goes to the FinalPoint group (MIRROR_CHAT_ID), paged when it is long."""
+        from core import telegram_notify as tn
+        tn.mirror_card(m, text)
+
     def _finish(self, m, chk, slot):
         m["checks"].append(chk)
         text = cards.render(m)
@@ -298,6 +303,7 @@ class Engine:
         except Exception as e:
             log.warning("card not sent for %s v %s: %s", m["home"], m["away"], e)
             return
+        self._fp(m, text)
         ping = None
         if slot["kind"] in LATE and m["play_keys"]:
             ping = cards.verdict(m, chk)
@@ -361,7 +367,9 @@ class Engine:
         m["skipped"] = True
         try:
             if m.get("msg_id"):
-                self._edit(m["msg_id"], cards.render(m) + "\n<b>Match skipped: tracking stopped.</b>", {"inline_keyboard": []})
+                _t = cards.render(m) + "\n<b>Match skipped: tracking stopped.</b>"
+                self._edit(m["msg_id"], _t, {"inline_keyboard": []})
+                self._fp(m, _t)
         except Exception:
             pass
         self.flush()

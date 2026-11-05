@@ -123,10 +123,10 @@ def test_book_lines_reads_main_lines():
     assert p["total"] == 201.0 and p["spread"] == -10.0
 
 
-def test_slots_three_checks_then_t60_and_final():
+def test_slots_four_checks_then_t60_and_final():
     s = plan_slots(T0, TIP)
-    assert [x["kind"] for x in s] == ["check", "check", "check", "t60", "final", "t15", "last"]
-    assert abs(s[3]["t"] - (TIP - 3600)) < 1 and abs(s[4]["t"] - (TIP - 1800)) < 1
+    assert [x["kind"] for x in s] == ["check", "check", "check", "check", "t60", "final", "t15", "last"]
+    assert abs(s[4]["t"] - (TIP - 3600)) < 1 and abs(s[5]["t"] - (TIP - 1800)) < 1
     late = plan_slots(TIP - 3000, TIP)          # first seen 50 min before tip-off
     assert late[-3]["kind"] == "final" and late[-1]["kind"] == "last" and all(x["t"] >= TIP - 3000 for x in late)
 

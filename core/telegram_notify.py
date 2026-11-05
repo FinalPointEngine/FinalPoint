@@ -12,6 +12,73 @@ LABELS = {"h2h": "Moneyline", "spreads": "Spread", "totals": "Total"}
 _START_KEYS = ("commence_time", "start_time", "start", "commence", "kickoff")
 
 
+def _mirror_chat():
+    return (os.environ.get("MIRROR_CHAT_ID") or "").strip()
+
+
+SEP = "━" * 15
+
+
+def _pages(text: str, head: str, limit: int = 3700) -> list:
+    """Split one long match card into pages at the ━━━ lines between check blocks. Page 2 and later start with `head`."""
+    blocks = text.split("\n" + SEP + "\n")
+    pages, cur = [], ""
+    for b in blocks:
+        part = b if not cur else cur + "\n" + SEP + "\n" + b
+        if len(part) > limit and cur:
+            pages.append(cur)
+            cur = head + "\n" + SEP + "\n" + b
+        else:
+            cur = part
+        while len(cur) > limit:                        # one block longer than a page: cut at a line break
+            cut = cur.rfind("\n", 0, limit)
+            cut = cut if cut > 200 else limit
+            pages.append(cur[:cut])
+            cur = head + "\n" + cur[cut:].lstrip("\n")
+    pages.append(cur)
+    return pages
+
+
+def mirror_card(m: dict, text: str):
+    """Copy a match card to the FinalPoint group (MIRROR_CHAT_ID): one message per page, edited in place as the card grows.
+    A card that outgrows one message continues on a new page that is a reply to the previous page. State lives in m['fp'] /
+    m['fp_h'] (kept with the match). Never raises and never touches the original post."""
+    chat = _mirror_chat()
+    if not chat or not settings.TELEGRAM_TOKEN or not text:
+        return
+    try:
+        import hashlib
+        head = "<b>MATCH TRACKER</b> · %s v %s" % (html.escape(str(m.get("home", ""))), html.escape(str(m.get("away", ""))))
+        pages = _pages(text, head)
+        ids, hs = m.setdefault("fp", []), m.setdefault("fp_h", [])
+        for i, pg in enumerate(pages):
+            if i > 0:
+                pg = pg.replace(head, head + " · page %d" % (i + 1), 1) if pg.startswith(head) else pg
+            h = hashlib.md5(pg.encode()).hexdigest()[:12]
+            if i < len(ids):
+                if hs[i] == h:
+                    continue
+                try:
+                    post_json(API.format(token=settings.TELEGRAM_TOKEN, method="editMessageText"),
+                              dict(chat_id=chat, message_id=ids[i], text=pg[:4000], parse_mode="HTML"))
+                except Exception as e:
+                    if "not modified" not in str(e):
+                        raise
+                hs[i] = h
+            else:
+                q = dict(chat_id=chat, text=pg[:4000], parse_mode="HTML", disable_notification=True)
+                if i > 0 and ids:
+                    q["reply_to_message_id"] = ids[i - 1]
+                    q["allow_sending_without_reply"] = True
+                out = post_json(API.format(token=settings.TELEGRAM_TOKEN, method="sendMessage"), q)
+                mid = ((out or {}).get("result") or {}).get("message_id")
+                if mid:
+                    ids.append(mid)
+                    hs.append(h)
+    except Exception as e:
+        log.warning("FinalPoint card not sent: %s", str(e).replace(settings.TELEGRAM_TOKEN or "~", "***")[:160])
+
+
 def api(method: str, **payload):
     if not settings.TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")

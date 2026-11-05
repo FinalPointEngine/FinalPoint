@@ -147,13 +147,13 @@ LATE_NAME = {"t60": "T-60", "final": "T-30", "t15": "T-15", "last": "T-5"}
 
 
 def plan_slots(now: float, tip: float) -> list:
-    """Three checks spread between now and T-65 min, then T-60 and FINAL (T-30). Slots already in the past are left out
+    """Four checks spread between now and T-65 min, then T-60 and FINAL (T-30). Slots already in the past are left out
     (a game first seen late gets what is still possible)."""
     t60, t30 = tip - 3600, tip - 1800
     slots = []
     span = (t60 - 300) - now
     if span >= 3600:
-        times = [now, now + span / 3, now + 2 * span / 3]
+        times = [now, now + span / 4, now + 2 * span / 4, now + 3 * span / 4]
     elif span >= 1800:
         times = [now, now + span / 2]
     else:
@@ -795,6 +795,8 @@ class MatchTracker:
                 m["msg_id"] = self._tg_send(text, kb)
         else:
             m["msg_id"] = self._tg_send(text, kb, silent=True)
+        from core import telegram_notify as _tn
+        _tn.mirror_card(m, text)
         if ping:
             try:
                 self._tg_send(ping, None, reply_to=m.get("msg_id"))

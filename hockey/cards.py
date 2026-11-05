@@ -28,12 +28,12 @@ def tip_text(t: float) -> str:
 
 
 def plan_slots(now: float, tip: float) -> list:
-    """Checks spread between now and T-65, then T-60, T-30 (FINAL), T-15 and T-5. Slots already in the past are left out."""
+    """Four checks spread between now and T-65, then T-60, T-30 (FINAL), T-15 and T-5. Slots already in the past are left out."""
     t60, t30 = tip - 3600, tip - 1800
     slots = []
     span = (t60 - 300) - now
     if span >= 3600:
-        times = [now, now + span / 3, now + 2 * span / 3]
+        times = [now, now + span / 4, now + 2 * span / 4, now + 3 * span / 4]
     elif span >= 1800:
         times = [now, now + span / 2]
     else:
