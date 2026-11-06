@@ -39,16 +39,16 @@ def _pages(text: str, head: str, limit: int = 3700) -> list:
     return pages
 
 
-def mirror_card(m: dict, text: str):
+def mirror_card(m: dict, text: str, chat: str = None, title: str = "MATCH TRACKER"):
     """Copy a match card to the FinalPoint group (MIRROR_CHAT_ID): one message per page, edited in place as the card grows.
     A card that outgrows one message continues on a new page that is a reply to the previous page. State lives in m['fp'] /
     m['fp_h'] (kept with the match). Never raises and never touches the original post."""
-    chat = _mirror_chat()
+    chat = chat or _mirror_chat()
     if not chat or not settings.TELEGRAM_TOKEN or not text:
         return
     try:
         import hashlib
-        head = "<b>MATCH TRACKER</b> · %s v %s" % (html.escape(str(m.get("home", ""))), html.escape(str(m.get("away", ""))))
+        head = "<b>%s</b> · %s v %s" % (html.escape(title), html.escape(str(m.get("home", ""))), html.escape(str(m.get("away", ""))))
         pages = _pages(text, head)
         ids, hs = m.setdefault("fp", []), m.setdefault("fp_h", [])
         for i, pg in enumerate(pages):

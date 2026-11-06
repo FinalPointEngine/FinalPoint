@@ -191,6 +191,7 @@ class Engine:
             chk.update(status="hold", held="SportyBet is not showing this game right now")
             return self._finish(m, chk, slot)
         sm = model.complete(soft)
+        self._fx = dict(soft=sm, pin=None)
         chk["soft_1x2"] = sm.get("1x2")
         ttl = 30.0 if m["tip"] - now < 3 * 3600 else 60.0
         force = None
@@ -204,6 +205,7 @@ class Engine:
             chk.update(status="nopin", why=[note] if note else [])
             return self._finish(m, chk, slot)
         pm = model.complete(pev)
+        self._fx = dict(soft=sm, pin=pm)
         chk["pin_1x2"] = pm.get("1x2")
         dis = model.agree(sm, pm)
         if dis:
@@ -274,6 +276,15 @@ class Engine:
                     chk["change"].append("SportyBet %s %.2f to %.2f." % (sel, a, b))
         return self._finish(m, chk, slot)
 
+    def _feed(self, m, chk):
+        """Structured copy of this check for the FinalPoint service (FP_FEED_URL); the engine's own work never depends on it."""
+        fx, self._fx = getattr(self, "_fx", None), None
+        try:
+            from core import fpfeed
+            fpfeed.emit("FB", m, chk, fx, cfg.min_ev())
+        except Exception as e:
+            log.warning("feed not queued: %s", e)
+
     def _fp(self, m, text):
         """The match card also goes to the FinalPoint group (MIRROR_CHAT_ID), paged when it is long."""
         from core import telegram_notify as tn
@@ -281,6 +292,7 @@ class Engine:
 
     def _finish(self, m, chk, slot):
         m["checks"].append(chk)
+        self._feed(m, chk)
         text = cards.render(m)
         kb = self._keyboard(m)
         try:

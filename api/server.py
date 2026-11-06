@@ -2,7 +2,7 @@ import hmac
 import os
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from api.models import PickOut, ReadyOut
 from config.settings import settings, PINNACLE
 from services.logger import get_logger
@@ -43,6 +43,10 @@ async def lifespan(app: FastAPI):
         from thirdeye.runtime import ThirdEyeRuntime    # the validator: own database, own Telegram bot, reads the 7 engines
         _runtime = ThirdEyeRuntime()
         _runtime.start()
+    elif sport == "finalpoint":
+        from finalpoint.runtime import FinalPointRuntime  # receives every engine's checks, posts one report per match
+        _runtime = FinalPointRuntime()
+        _runtime.start()
     elif sport == "tennis":
         from tennis.runtime import TennisRuntime       # a separate service: own database, own Telegram bot
         _runtime = TennisRuntime()
@@ -79,6 +83,17 @@ def _check_token(x_api_key: str = Header(default="")):
 @app.get("/health")
 def health():
     return {"status": "ok"}  # static on purpose: Render's health check must never depend on DB or APIs
+
+
+@app.post("/fp/feed")
+async def fp_feed(request: Request, x_fp_token: str = Header(default="")):
+    """FinalPoint service only: the engines post each check here (header X-FP-Token = FP_FEED_TOKEN)."""
+    tok = os.environ.get("FP_FEED_TOKEN", "")
+    if not tok or not hmac.compare_digest(x_fp_token.encode(), tok.encode()):
+        raise HTTPException(401, "invalid token")
+    if _runtime is None or not hasattr(_runtime, "feed"):
+        raise HTTPException(503, "not a FinalPoint service")
+    return await asyncio.to_thread(_runtime.feed, await request.json())
 
 
 @app.get("/ready", response_model=ReadyOut)

@@ -378,6 +378,12 @@ class MatchTracker:
         chk["hint"] = ("%s: %s" % (tn._mlabel(edges[0]), tn.describe(edges[0]))) if edges else None
         chk["gone"] = [self._desc_key(m, k) for k in m.get("play_keys", []) if k not in keys]
         m["checks"].append(chk)
+        try:                                   # structured copy for the FinalPoint service (off unless FP_FEED_URL is set)
+            from config.settings import settings
+            from core import fpfeed
+            fpfeed.emit("BB", m, chk, dict(soft=chk.get("soft"), pin=chk.get("pin")), settings.MIN_EV)
+        except Exception as e:
+            log.warning("feed not queued: %s", e)
         return chk
 
     @staticmethod
