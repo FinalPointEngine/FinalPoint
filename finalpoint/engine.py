@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from finalpoint import ladder as ld, rules
+from finalpoint import card, ladder as ld, results, rules
 from finalpoint.rules import describe, edge
 
 log = logging.getLogger("finalpoint")
@@ -69,12 +69,19 @@ class FinalPoint:
         rec.update(home=p.get("home"), away=p.get("away"), league=p.get("league"), tip=p.get("tip"), min_ev=p.get("min_ev", 0.04))
         rec.setdefault("val", {})
         rec.setdefault("wd", {})
+        prev = rec["checks"][-1] if rec["checks"] else None
         c = self._analyse(rec, p, p["chk"])
         rec["checks"].append(c)
         rec["checks"] = rec["checks"][-14:]
+        fy = self._fishy(rec)
+        c["fy"] = list(fy)
+        top = c.pop("_top", [])
+        c["story"] = card.story(rec, c, prev, fy, top)
+        c["st"] = self._status(rec, c, fy[0], top)
         rec["top3"] = c.get("top3") or rec.get("top3") or []
+        rec["picks"] = c.get("picks") or rec.get("picks") or []
         self._coverage(tag, rec["league"], c["pin"])
-        text = self.report(rec)
+        text = card.render(rec)
         try:
             self._post(rec, text)
         except Exception as e:
@@ -112,9 +119,39 @@ class FinalPoint:
         return rows, pf
 
     # ---------------------------------------------------------------- analysis of one check
+    def _derived(self, tag, soft):
+        """No Pinnacle price: fit the ladder to SportyBet's OWN moneyline and its most balanced total, then price its other lines.
+        Shows only where SportyBet's lines disagree with each other. Rows are marked derived, never exact."""
+        if tag not in ("FB", "IH", "AF", "HB") or not soft:
+            return []
+        pseudo = {}
+        for k in ("1x2", "ml"):
+            v = soft.get(k)
+            if isinstance(v, dict) and v and not any(isinstance(x, dict) for x in v.values()):
+                pseudo[k] = v
+        best = None
+        for ln, d in (soft.get("total") or {}).items():
+            try:
+                gap = abs(1 / float(d["over"]) - 1 / float(d["under"]))
+            except Exception:
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, ln, d)
+        if not pseudo or best is None:
+            return []
+        pseudo["total"] = {best[1]: best[2]}
+        lad = ld.ladder(tag, soft, pseudo)
+        if not lad["ok"]:
+            return []
+        out = []
+        for r in lad["rows"]:
+            r = dict(r, exact=False, derived=True)
+            out.append(r)
+        return out
+
     def _analyse(self, rec, p, chk):
         tag, thr = rec["tag"], float(rec.get("min_ev") or 0.04)
-        half = thr / 2
+        half, mult = thr / 2, rules.MODEL_MULT()
         soft, pin = p.get("soft") or {}, p.get("pin")
         has_pin = bool(pin) if tag != "BB" else bool(p.get("brows"))
         prev = rec["checks"][-1] if rec["checks"] else None
@@ -129,8 +166,14 @@ class FinalPoint:
             if lad["ok"]:
                 known = {(r["mkt"], r["line"], r["sel"]) for r in rows}
                 rows += [r for r in lad["rows"] if (r["mkt"], r["line"], r["sel"]) not in known]
+        c["derived"] = False
+        if not has_pin:
+            d_rows = self._derived(tag, soft)
+            if d_rows:
+                rows, c["derived"] = d_rows, True
         for r in rows:
             r["pkey"] = _pk(r["mkt"], r["line"], r["sel"])
+            r.setdefault("derived", False)
         pp = (prev or {}).get("p") or {}
         c["p"] = {r["pkey"]: round(r["p"], 4) for r in rows if r["exact"]}
         for r in rows:
@@ -139,28 +182,30 @@ class FinalPoint:
         for ch in rec["checks"]:
             for k, v in (ch.get("e") or {}).items():
                 hist.setdefault(k, []).append(v)
-        listed_before = {k for ch in rec["checks"] for k in (ch.get("e") or {})}
-        c["e"] = {r["pkey"]: round(r["edge"], 4) for r in rows if r["edge"] >= half}
+        c["e"] = {r["pkey"]: round(r["edge"], 4) for r in rows if r["edge"] >= half and not r["derived"]}
         home, away = rec.get("home") or "", rec.get("away") or ""
         out = []
         for r in sorted(rows, key=lambda r: -r["edge"]):
             k, e = r["pkey"], r["edge"]
-            was_val = k in rec["val"]
-            call, note = None, ""
-            if was_val:
+            own = r["exact"] and not r["derived"]               # priced by Pinnacle on this exact line
+            need = thr if own else thr * mult                   # a line priced by a model needs more edge
+            call, note = "", ""
+            if k in rec["val"] and not r["derived"]:
                 if e >= half:
                     call = "VALIDATED (holds)"
                 else:
                     call, note = "WITHDRAWN", "edge gone: %+.1f%%" % (100 * e)
                     rec["val"].pop(k, None)
                     rec["wd"][k] = c["label"]
-            elif e >= thr:
+            elif e >= need:
                 why = []
-                if not r["exact"]:
+                if r["derived"]:
+                    why.append("NO PINNACLE, derived from SportyBet's own lines")
+                elif not r["exact"]:
                     why.append("model-priced line, Pinnacle does not list it")
                 elif e > rules.MAX_EDGE():
                     why.append("edge above %.0f%%, check it is the same market on both books" % (100 * rules.MAX_EDGE()))
-                if not fresh:
+                if not fresh and not r["derived"]:
                     why.append("Pinnacle price %.0f min old" % age)
                 stable = bool(hist.get(k)) and hist[k][-1] >= thr
                 if not why and (stable or r["toward"]):
@@ -172,26 +217,20 @@ class FinalPoint:
                     note = "AUDIT: " + (", ".join(why) if why else "first check with this edge, confirm at the next check")
             elif e >= half:
                 call = "WATCH"
-            elif k in listed_before:
-                call, note = "FADING", "no value now"
-            if call:
-                out.append(dict(pkey=k, d=describe(r["mkt"], r["line"], r["sel"], home, away), odds=round(r["odds"], 2),
-                                fair=round(1 / r["p"], 2), e=round(e, 4), call=call, note=note, exact=r["exact"]))
-        rank = lambda o: (not o["call"].startswith("VALIDATED"), not o["exact"], -o["e"])      # validated first, Pinnacle-priced before model-priced
-        top = sorted([o for o in out if o["call"] in ("VALIDATED", "VALIDATED (holds)", "POSSIBLE", "WATCH")], key=rank)[:3]
+            out.append(dict(pkey=k, mkt=r["mkt"], line=r["line"], sel=r["sel"], d=describe(r["mkt"], r["line"], r["sel"], home, away),
+                            odds=round(r["odds"], 2), fair=round(1 / r["p"], 2), e=round(e, 4), call=call, note=note, exact=r["exact"],
+                            derived=r["derived"]))
+        top = self._top3(out)
         for i, o in enumerate(top):
             o["star"] = i + 1
         c["top3"] = [o["pkey"] for o in top]
-        # keep the listed rows: the starred first, then the rest, at most MAX_LIST
-        keep = top + [o for o in out if o not in top]
-        c["mk"] = keep[:MAX_LIST]
-        c["closest"] = None
-        if not top and rows:
-            b = max(rows, key=lambda r: r["edge"])
-            c["closest"] = dict(d=describe(b["mkt"], b["line"], b["sel"], home, away), odds=round(b["odds"], 2),
-                                fair=round(1 / b["p"], 2), e=round(b["edge"], 4))
+        c["picks"] = [{k: o[k] for k in ("pkey", "mkt", "line", "sel", "d", "odds", "fair", "e", "call", "exact", "derived")}
+                      | {"tier": self._tier(o)} for o in top]
+        c["_top"] = top
+        c["tbl"] = self._table(tag, out, top, home, away)
         c["verdict"] = ("VALIDATED" if any(o["call"].startswith("VALIDATED") for o in out) else
-                        "POSSIBLE" if any(o["call"] == "POSSIBLE" for o in out) else "NO VALUE") if has_pin else "NO PRICE"
+                        "POSSIBLE" if any(o["call"] == "POSSIBLE" for o in out) else "NO VALUE") if (has_pin or c["derived"]) else "NO PRICE"
+        c["wd_now"] = [o["d"] for o in out if o["call"] == "WITHDRAWN"]
         if tag == "BB" and chk.get("status") == "play":
             c["engine_rows"] = [dict(desc="%s %s %s" % (r.get("market"), r.get("selection"), r.get("line") if r.get("line") is not None else ""),
                                      odds=r.get("odds"), ev=r.get("ev")) for r in (chk.get("rows") or [])][:3]
@@ -206,6 +245,68 @@ class FinalPoint:
         except Exception:
             pass
         return c
+
+    @staticmethod
+    def _tier(o):
+        """How far a pick can be trusted: 0 VALIDATED, 1 POSSIBLE on a Pinnacle line, 2 POSSIBLE model/derived, 3 closest-to-value (WATCH)."""
+        if o["call"].startswith("VALIDATED"):
+            return 0
+        if o["call"] == "POSSIBLE":
+            return 1 if (o["exact"] and not o["derived"]) else 2
+        return 3
+
+    def _top3(self, out):
+        """The best 3 markets, always (when there is any price): validated first, then possible, then the closest to value.
+        One side per line, and a market type is repeated only for a real (validated / possible) call."""
+        cands = sorted([o for o in out if o["call"] != "WITHDRAWN"], key=lambda o: (self._tier(o), not (o["exact"] and not o["derived"]), -o["e"]))
+        picked, seen, kinds, rest = [], set(), set(), []
+        for o in cands:
+            g = (o["mkt"], o["line"])
+            if g in seen:
+                continue
+            if o["mkt"] in kinds and self._tier(o) == 3:
+                rest.append(o)
+                continue
+            seen.add(g)
+            kinds.add(o["mkt"])
+            picked.append(o)
+            if len(picked) == 3:
+                return picked
+        for o in rest:
+            g = (o["mkt"], o["line"])
+            if g not in seen and len(picked) < 3:
+                seen.add(g)
+                picked.append(o)
+        return picked
+
+    @staticmethod
+    def _table(tag, out, top, home, away):
+        """The price table of one check: the line of every starred pick, plus the line closest to even for ml / spread / total."""
+        by = {}
+        for o in out:
+            by.setdefault((o["mkt"], o["line"]), []).append(o)
+        chosen = {(o["mkt"], o["line"]): True for o in top}                    # True = asked for by a pick
+        for mk in ("ml", "1x2", "ah", "total"):
+            if any(m == mk or (m in ("ml", "1x2") and mk in ("ml", "1x2")) for (m, _l) in chosen):
+                continue
+            cand = [(g, v) for g, v in by.items() if g[0] == mk]
+            if cand:
+                g, _v = min(cand, key=lambda gv: abs(1 / gv[1][0]["fair"] - 0.5))
+                chosen.setdefault(g, False)
+        groups = []
+        star = {o["pkey"]: o["star"] for o in top}
+        for g in sorted(chosen, key=lambda g: (card.ORDER.get(g[0], 3), g[1] if g[1] is not None else 0)):
+            rows = []
+            for o in sorted(by.get(g, []), key=lambda o: {"home": 0, "over": 0, "draw": 1}.get(o["sel"], 2)):
+                tagtxt = o["call"].replace(" (holds)", "") if o["call"] else ""
+                if o["pkey"] in star and not tagtxt:
+                    tagtxt = "WATCH (closest)"
+                mark = "derived" if o["derived"] else ("" if o["exact"] else "model")
+                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away), o=o["odds"], f=o["fair"], e=o["e"],
+                                 s=o["pkey"] in star, t=tagtxt, m=mark))
+            if rows:
+                groups.append(dict(title=card.group_title(tag, g[0], not chosen[g]), rows=rows))
+        return groups
 
     @staticmethod
     def _snap(pf):
@@ -275,95 +376,82 @@ class FinalPoint:
         lvl, lab = rules.fishy(streak, (not had_pin) and usual, ch[-1].get("kind") in LATE, cov, False)
         return lvl, lab, streak
 
+    # ---------------------------------------------------------------- results
+    def _finish(self, rec, hg, ag):
+        """Grade the picks, add MATCH ENDED, update the running record (fp_stats, fp_ledger) and edit the card."""
+        stats = self._rd("fp_stats", {})
+        end, graded = results.end_block(rec["tag"], rec, hg, ag, stats)
+        rec["end"] = end
+        led = self._rd("fp_ledger", [])
+        for g in graded:
+            if g.get("status") != "ungraded":
+                led.append(dict(tag=rec["tag"], key=g.get("pkey"), tier=g["tier"], status=g["status"], ret=g.get("ret", 0.0), t=end["at"]))
+        self._wr("fp_stats", stats)
+        self._wr("fp_ledger", led[-500:])
+        try:
+            self._post(rec, card.render(rec))
+        except Exception as e:
+            log.warning("result not posted: %s", e)
+        self._wr("fp:%s:%s" % (rec["tag"], rec["key"]), rec)
+
+    def settle_due(self, getter=None, now=None) -> int:
+        """Look for the final score of every match that should be over. Called by the runtime every few minutes."""
+        now = now or time.time()
+        done = 0
+        for rk, tip in list((self._rd("fp_index", {})).items()):
+            if not tip or now < tip + results.EARLIEST or now > tip + results.LATEST:
+                continue
+            rec = self._rd(rk, None)
+            if not rec or rec.get("end") or now - rec.get("end_try", 0) < results.RETRY:
+                continue
+            sc = results.find_score(rec["tag"], rec.get("home"), rec.get("away"), tip, getter)
+            with self._lock:
+                rec = self._rd(rk, None)
+                if not rec or rec.get("end"):
+                    continue
+                if sc is None:
+                    rec["end_try"] = now
+                    self._wr(rk, rec)
+                    continue
+                self._finish(rec, sc[0], sc[1])
+                done += 1
+        return done
+
+    def manual_result(self, home, away, hg, ag) -> str:
+        """/result Home v Away 27-20: for matches the free feeds do not cover (handball, volleyball)."""
+        same = results._same
+        with self._lock:
+            for rk, tip in (self._rd("fp_index", {})).items():
+                rec = self._rd(rk, None)
+                if not rec or rec.get("end"):
+                    continue
+                h, a = rec.get("home") or "", rec.get("away") or ""
+                if same(h, home) and same(a, away):
+                    self._finish(rec, hg, ag)
+                    return "Saved: %s %d-%d %s. Card updated." % (h, hg, ag, a)
+                if same(h, away) and same(a, home):
+                    self._finish(rec, ag, hg)
+                    return "Saved (teams were the other way round): %s %d-%d %s. Card updated." % (h, ag, hg, a)
+        return "No open FinalPoint card matches those teams."
+
     # ---------------------------------------------------------------- card
     def report(self, rec) -> str:
-        e = html.escape
-        tag, ch = rec["tag"], rec["checks"]
-        c = ch[-1]
-        home, away = rec.get("home") or "", rec.get("away") or ""
-        lvl, lab, streak = self._fishy(rec)
-        L = ["%s <b>FINALPOINT · %s · %s vs %s</b>" % (ICON.get(tag, ""), tag, e(home), e(away)),
-             "%s · %s" % (e(str(rec.get("league") or "")), _local(rec["tip"]).strftime("%a %d %b %H:%M") if rec.get("tip") else "")]
-        L += self._status(rec, c, lvl, lab)
-        for x in ch:
-            L += [SEP, "<b>%s</b> · %s" % (e(_label(x.get("label"))), _local(x["t"]).strftime("%H:%M") if x.get("t") else "")]
-            if not x["pin"]:
-                L.append("• No Pinnacle price: nothing to compare")
-            elif x.get("mk"):
-                for o in x["mk"]:
-                    L.append("• %s%s · %.2f vs fair %.2f · edge %+.1f%% · <b>%s</b>%s%s" % (
-                        ("★%d " % o["star"]) if o.get("star") else "", e(o["d"]), o["odds"], o["fair"], 100 * o["e"], o["call"],
-                        (" (%s)" % e(o["note"])) if o["note"] else "", "" if o["exact"] else " [MODEL line]"))
-            elif x.get("closest"):
-                b = x["closest"]
-                L.append("• No market with value. Closest: %s · %.2f vs fair %.2f · edge %+.1f%%" % (e(b["d"]), b["odds"], b["fair"], 100 * b["e"]))
-            else:
-                L.append("• No market with value at this check")
-            for r in x.get("engine_rows") or []:
-                L.append("• TheBeast: %s @ %s" % (e(str(r["desc"]).strip()), r.get("odds")))
-        L.append(SEP)
-        if c["pin"]:
-            L.append("Pinnacle view: %s" % e(self._view(c, home, away)))
-        else:
-            L.append("Pinnacle MISSING: %d check%s in a row" % (streak, "s" if streak != 1 else ""))
-        if lvl >= 2:
-            L += ["<b>Hunt mode:</b> SportyBet-only markets: %s" % (e(", ".join(c.get("only") or [])) or "none listed"),
-                  "Drift (SportyBet moneyline): %s" % e(self._drift(ch)),
-                  "No fair price, so no edge can be shown. Watch only, do not bet blind."]
-        if c.get("ladder_ok") is False and c["pin"] and c.get("fit_where"):
-            L.append("Ladder off this check: model misses Pinnacle by %.1f points on %s" % (100 * (c.get("fit_err") or 0), e(c["fit_where"])))
-        sh = c.get("shadow") or []
-        if sh:
-            L.append("Shadow flags (logged, not used): %s" % e("; ".join(sh)))
-        L.append("TheBeast: %s" % ({"play": "PLAY NOW", "seen": "edge seen, waiting for a second check", "watch": "no pick",
-                                    "nopin": "no Pinnacle price", "hold": "on hold"}.get(c.get("status"), str(c.get("status")))))
-        L.append("History: %s" % e(" · ".join("%s %s" % (_label(x.get("label")).replace("Check ", "C").split(":")[0], x["verdict"]) for x in ch[-8:])))
-        return "\n".join(L)
-
-    def _status(self, rec, c, lvl, lab):
-        e = html.escape
-        L = []
-        if lvl >= 2:
-            L.append("<b>STATUS: FISHY - HUNT, DO NOT BET BLIND</b> (level %s)" % e(lab))
-        elif lvl == 1:
-            L.append("<b>STATUS: WATCH</b> (Pinnacle price missing 1 check)")
-        elif not c["pin"]:
-            L.append("<b>STATUS: NO PRICE</b> (reported only, never a bet)")
-        else:
-            last = {o["pkey"]: o for o in (c.get("mk") or [])}
-            val = [last[k] for k in rec["val"] if k in last]
-            aud = [o for o in (c.get("mk") or []) if o["call"] == "POSSIBLE"]
-            if val:
-                for o in val:
-                    L.append("<b>STATUS: VALIDATED</b> · %s @ %.2f · since %s" % (e(o["d"]), o["odds"], e(_label(rec["val"][o["pkey"]]))))
-            else:
-                L.append("<b>STATUS: %s</b>" % ("AUDIT" if aud else "NO VALUE YET"))
-            for o in aud[:3]:
-                L.append("AUDIT: %s · %s" % (e(o["d"]), e(o["note"].replace("AUDIT: ", ""))))
-            if rec.get("wd"):
-                L.append("WITHDRAWN: %s" % e(", ".join("%s %s (%s)" % (k.split("|")[0], k.split("|")[1], v) for k, v in rec["wd"].items())))
-            top = [o for o in (c.get("mk") or []) if o.get("star")]
-            if top:
-                L.append("BEST 3: %s" % e(" · ".join("★%d %s (%+.1f%%)" % (o["star"], o["d"], 100 * o["e"]) for o in top)))
-            nxt = c.get("nxt")
-            if nxt:
-                L.append("Next check: %s" % _local(nxt).strftime("%H:%M"))
-        return L
+        return card.render(rec)
 
     @staticmethod
-    def _view(c, home, away):
-        p = c.get("p") or {}
-        parts = []
-        for k, lab in (("1x2||home", home), ("ml||home", home), ("1x2||away", away), ("ml||away", away), ("1x2||draw", "Draw")):
-            if k in p:
-                parts.append("%s %.0f%%" % (lab, 100 * p[k]))
-        return "Moneyline: " + ", ".join(parts) if parts else "Pinnacle has priced %d lines" % len(p)
-
-    @staticmethod
-    def _drift(ch):
-        out = []
-        for x in ch:
-            ml = x.get("ml") or {}
-            if "home" in ml:
-                out.append("%.2f" % ml["home"])
-        return " -> ".join(out) if out else "no SportyBet moneyline price seen"
+    def _status(rec, c, lvl, top):
+        if lvl >= 2:
+            return "FISHY - HUNT, DO NOT BET BLIND"
+        if not c["pin"] and not c.get("derived"):
+            return "WATCH (Pinnacle price missing 1 check)" if lvl == 1 else "NO PRICE (nothing reliable to compare)"
+        if c.get("wd_now"):
+            return "WITHDRAWN: %s (edge gone)" % ", ".join(c["wd_now"][:2])
+        val = [o for o in top if o["call"].startswith("VALIDATED")]
+        if val:
+            return "VALIDATED: %s @ %.2f" % (val[0]["d"], val[0]["odds"])
+        poss = [o for o in top if o["call"] == "POSSIBLE"] or []
+        if poss:
+            return "POSSIBLE (%s)" % (poss[0]["note"] or "AUDIT")
+        if not top:
+            return "WATCH (no market to compare)"
+        return "WATCH (no edge yet)" + (", NO PINNACLE: derived" if c.get("derived") else "")

@@ -1,3 +1,4 @@
+import html
 import json
 
 from core import fpfeed, telegram_notify as tn
@@ -62,31 +63,44 @@ def _fp():
     return fp, store, posts
 
 
-def test_report_is_one_growing_card_with_a_block_per_check():
+def test_card_follows_the_agreed_layout_and_grows_one_block_per_check():
     fp, store, posts = _fp()
     soft = json.loads(json.dumps(SOFT))
     soft["ah"]["-1.5"]["away"] = 1.62
     for i in range(3):
         assert fp.feed(_payload(i, soft=soft, label="Check %d" % (i + 1)))["ok"]
     t = posts[-1]
-    assert t.startswith("🏒 <b>FINALPOINT · IH · Seattle vs Calgary</b>") and "STATUS:" in t
-    assert all(("<b>Check %d</b>" % n) in t for n in (1, 2, 3))          # every check keeps its block
-    assert "★1" in t and "BEST 3:" in t and "Pinnacle view:" in t and "History:" in t
+    assert t.startswith("<b>FINALPOINT: Ice Hockey</b>\nNHL\n<b>Seattle vs</b>\n<b>Calgary</b>\n")
+    assert " WAT" in t and "TheBeast" not in t and "History:" not in t              # nothing copied from the SportsBOT card
+    assert all(("<b>Check %d</b>" % n) in t for n in (1, 2, 3))
+    assert t.count("<b>Status:</b>") == 3 and t.count("<b>Match Story:</b>") == 3 and "<pre>" in t and "SportyBet | Pinnacle fair | edge" in t
+    assert "★" in t and "MONEYLINE" in t
     rec = json.loads(store["fp:IH:m1"])
-    assert len(rec["checks"]) == 3 and rec["top3"]
+    assert len(rec["checks"]) == 3 and len(rec["picks"]) == 3
 
 
-def test_market_is_possible_then_validated_on_the_second_check():
+def test_top_three_is_always_filled_and_tagged_even_with_no_edge():
+    fp, store, posts = _fp()
+    soft = json.loads(json.dumps(SOFT))
+    soft["total"].pop("5.5")                                           # only lines Pinnacle prices itself: nothing beats the fair price
+    fp.feed(_payload(0, soft=soft))
+    rec = json.loads(store["fp:IH:m1"])
+    assert len(rec["picks"]) == 3 and all(p["call"] in ("", "WATCH") for p in rec["picks"])
+    assert "WATCH (closest)" in posts[-1] and "Status:</b> WATCH (no edge yet)" in posts[-1]
+    assert len({(p["mkt"], p["line"]) for p in rec["picks"]}) == 3                     # one side per line
+
+
+def test_market_is_possible_then_validated_on_the_second_check_then_withdrawn():
     fp, store, posts = _fp()
     soft = json.loads(json.dumps(SOFT))
     soft["ah"]["-1.5"]["away"] = 1.62                                  # fair 1.50 -> value on Calgary +1.5
     fp.feed(_payload(0, soft=soft))
-    assert "POSSIBLE" in posts[-1] and "AUDIT" in posts[-1] and "STATUS: VALIDATED" not in posts[-1]
+    assert "POSSIBLE" in posts[-1] and "AUDIT" in posts[-1] and "Status:</b> VALIDATED" not in posts[-1]
     fp.feed(_payload(1, soft=soft, label="Check 2"))
-    assert "STATUS: VALIDATED" in posts[-1] and "Calgary +1.5" in posts[-1]
+    assert "Status:</b> VALIDATED: Calgary +1.5" in posts[-1]
     soft["ah"]["-1.5"]["away"] = 1.40                                  # price falls away: the validation is withdrawn
     fp.feed(_payload(2, soft=soft, label="Check 3"))
-    assert "WITHDRAWN" in posts[-1] and "STATUS: VALIDATED" not in posts[-1]
+    assert "Status:</b> WITHDRAWN" in posts[-1]
 
 
 def test_missing_pinnacle_is_fishy_only_when_it_was_there():
@@ -94,7 +108,7 @@ def test_missing_pinnacle_is_fishy_only_when_it_was_there():
     fp.feed(_payload(0))
     for i in range(1, 4):
         fp.feed(_payload(i, pin=None, label="Check %d" % (i + 1)))
-    assert "FISHY" in posts[-1] and "DO NOT BET BLIND" in posts[-1] and "Hunt mode" in posts[-1]
+    assert "FISHY - HUNT, DO NOT BET BLIND" in posts[-1] and "went missing is a warning" in posts[-1]
 
 
 def test_no_pinnacle_from_the_start_is_not_fishy_while_the_baseline_is_unknown():
@@ -103,7 +117,20 @@ def test_no_pinnacle_from_the_start_is_not_fishy_while_the_baseline_is_unknown()
         fp.feed(_payload(i, pin=None, label="Check %d" % (i + 1)))
     fp.feed(_payload(3, pin=None, label="Check: T-15"))
     t = posts[-1]
-    assert "FISHY" not in t and "NO PRICE" in t and "Check: T-15" in t and "Check: Check" not in t
+    assert "FISHY" not in t and "Check: T-15" in t and "Check: Check" not in t and "has not seen enough" in t
+
+
+def test_no_pinnacle_prices_sportybets_other_lines_from_its_own_and_never_validates():
+    fp, store, posts = _fp()
+    soft = json.loads(json.dumps(SOFT))
+    soft["total"]["5.5"] = {"over": 2.6, "under": 1.45}                 # far from what its own moneyline and 6.5 total imply
+    for i in range(3):
+        fp.feed(_payload(i, soft=soft, pin=None, label="Check %d" % (i + 1)))
+    t = html.unescape(posts[-1])
+    rec = json.loads(store["fp:IH:m1"])
+    assert rec["checks"][-1]["derived"] and "model fair" in t and "[derived]" in t
+    assert "priced SportyBet's other lines from its own" in t and "Status:</b> VALIDATED" not in t
+    assert rec["val"] == {}
 
 
 def test_stale_pinnacle_price_stays_possible_with_an_audit_reason():
@@ -112,7 +139,7 @@ def test_stale_pinnacle_price_stays_possible_with_an_audit_reason():
     soft["ah"]["-1.5"]["away"] = 1.62
     fp.feed(_payload(0, soft=soft))
     fp.feed(_payload(1, soft=soft, age=25.0, label="Check 2"))
-    assert "STATUS: VALIDATED" not in posts[-1] and "25 min old" in posts[-1]
+    assert "Status:</b> VALIDATED" not in posts[-1] and "25 min old" in posts[-1]
 
 
 def test_basketball_uses_the_price_table_of_its_tracker():
@@ -122,7 +149,41 @@ def test_basketball_uses_the_price_table_of_its_tracker():
                    dict(market="spreads", selection="away", line=-3.5, odds=1.80, p=0.48),
                    dict(market="totals", selection="over", line=150.5, odds=1.90, p=0.50)]
     fp.feed(pl)
-    assert "FINALPOINT · BB" in posts[-1] and "Seattle -3.5" in posts[-1] and "POSSIBLE" in posts[-1]
+    assert "FINALPOINT: Basketball" in posts[-1] and "Seattle -3.5" in posts[-1] and "POSSIBLE" in posts[-1]
+
+
+def test_match_ended_grades_the_top_three_in_plain_english_and_updates_the_record():
+    fp, store, posts = _fp()
+    soft = json.loads(json.dumps(SOFT))
+    soft["ah"]["-1.5"]["away"] = 1.62
+    fp.feed(_payload(0, soft=soft))
+    fp.feed(_payload(1, soft=soft, label="Check 2"))
+    assert fp.manual_result("Seattle", "Calgary", 3, 2).startswith("Saved")
+    t = posts[-1]
+    assert "<b>MATCH ENDED</b> · Seattle 3-2 Calgary" in t and "Calgary +1.5 [VALIDATED]: Won." in t
+    assert "points to spare" in t and "<b>Lesson:</b>" in t and "Record so far: VALIDATED 1W-0L" in t
+    stats = json.loads(store["fp_stats"])
+    assert stats["VALIDATED"]["w"] == 1 and json.loads(store["fp_ledger"])
+    assert fp.manual_result("Seattle", "Calgary", 1, 0).startswith("No open")           # a card is graded once
+
+
+def test_results_find_the_score_by_team_names_and_settle_due_closes_old_cards():
+    fp, store, posts = _fp()
+    fp.feed(_payload(0))
+    rows = [[2000000300, "NHL", "Seattle Kraken", "Calgary Flames", 4, 1]]
+    assert fp.settle_due(getter=lambda sport, date: rows, now=2000000000 + 3 * 3600) == 1
+    assert "MATCH ENDED" in posts[-1] and "Seattle 4-1 Calgary" in posts[-1]
+
+
+def test_reasons_cover_ah_total_ml_and_void():
+    from finalpoint import results as rs
+    pk = dict(pkey="total|6.5|under", mkt="total", line=6.5, sel="under", odds=1.9)
+    assert rs.reason("IH", pk, "won", 3, 2, "A", "B") == "5 goals in total, 1.5 under the 6.5 line."
+    pk = dict(pkey="ah|-1.5|home", mkt="ah", line=-1.5, sel="home", odds=2.0)
+    assert "missed by 0.5" in rs.reason("IH", pk, "lost", 3, 2, "A", "B")
+    pk = dict(pkey="ml||away", mkt="ml", line=None, sel="away", odds=2.0)
+    assert rs.reason("AF", pk, "lost", 27, 20, "A", "B") == "A won 27-20, so B did not."
+    assert rs.settle("BB", dict(pkey="ah|-3|home", mkt="ah", line=-3.0, sel="home", odds=2.0), 100, 97) == ("void", 0.0)
 
 
 def test_bad_payload_is_refused_and_feed_never_raises(monkeypatch):
