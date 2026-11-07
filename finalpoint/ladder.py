@@ -196,19 +196,23 @@ def _fit_normal(tag, pin_fair):
     return mg, tt, _err(pin_fair, mg, tt)
 
 
+LAST_MISS = {"where": ""}
+
+
 def _err(pin_fair, mg, tt):
-    worst = 0.0
+    worst, where = 0.0, ""
     for (k, ln), d in pin_fair.items():
         if ln is None:
             continue
         if k == "ah":
-            p = p_ah(mg, ln, "home")
-            if p is not None and "home" in d:
-                worst = max(worst, abs(p - d["home"]))
+            p, q = p_ah(mg, ln, "home"), d.get("home")
         elif k == "total":
-            p = p_total(tt, ln, "over")
-            if p is not None and "over" in d:
-                worst = max(worst, abs(p - d["over"]))
+            p, q = p_total(tt, ln, "over"), d.get("over")
+        else:
+            continue
+        if p is not None and q is not None and abs(p - q) > worst:
+            worst, where = abs(p - q), "%s %g: model %.0f%% vs Pinnacle %.0f%%" % (k, ln, 100 * p, 100 * q)
+    LAST_MISS["where"] = where
     return worst
 
 
@@ -218,7 +222,7 @@ def ladder(tag: str, soft: dict, pin: dict):
     pf = fair_table(pin or {})
     res = fit(tag, pf) if pf else None
     if not res:
-        return dict(ok=False, err=None, rows=[])
+        return dict(ok=False, err=None, rows=[], where="")
     mg, tt, err = res
     rows = []
     for mkt, fn, sels in (("ah", p_ah, ("home", "away")), ("total", p_total, ("over", "under"))):
@@ -234,4 +238,4 @@ def ladder(tag: str, soft: dict, pin: dict):
                 if p is None:
                     continue
                 rows.append(dict(mkt=mkt, line=line, sel=sel, odds=float(d[sel]), p=p, edge=float(d[sel]) * p - 1, exact=exact))
-    return dict(ok=err is not None and err <= _f("FP_MAX_FIT_ERR", 0.04), err=err, rows=rows)
+    return dict(ok=err is not None and err <= _f("FP_MAX_FIT_ERR", 0.04), err=err, rows=rows, where=LAST_MISS["where"])

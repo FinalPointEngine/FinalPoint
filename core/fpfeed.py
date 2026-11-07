@@ -33,7 +33,7 @@ def payload(tag: str, m: dict, chk: dict, fx: dict = None, min_ev: float = 0.04)
     keep = ("label", "kind", "t", "status", "age", "stale", "held", "keys", "pmap", "omap", "nxt", "away", "rows", "hint")
     return jsonable(dict(v=1, tag=tag, key=str(m.get("key")), league=m.get("lname") or m.get("league") or "", home=m.get("home"),
                          away=m.get("away"), tip=m.get("tip"), min_ev=min_ev, sent=time.time(),
-                         chk={k: chk.get(k) for k in keep if k in chk}, soft=(fx or {}).get("soft"), pin=(fx or {}).get("pin")))
+                         chk={k: chk.get(k) for k in keep if k in chk}, soft=(fx or {}).get("soft"), pin=(fx or {}).get("pin"), brows=(fx or {}).get("rows")))
 
 
 def _post(body: bytes):

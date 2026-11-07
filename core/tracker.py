@@ -187,6 +187,7 @@ class MatchTracker:
         self.shadow = None            # core/shadow.Shadow (paper picks), set by the engine
         self.blocks = None            # core/blocks.Blocks (time-block cards), set by the engine
         self._near = []
+        self._fprows = None
 
     def _repo(self):
         if self._repo_obj is None:
@@ -365,6 +366,8 @@ class MatchTracker:
             rows = self.beast.pinref.table_rows(ev) if pin else []
             lo, hi = total_range(ev.get("league"))
             rows = [r for r in rows if r.get("market") != "totals" or (r.get("line") is not None and lo <= r["line"] <= hi)]
+            self._fprows = [dict(market=r.get("market"), selection=r.get("selection"), line=r.get("line"), odds=r.get("odds"),
+                                 p=r.get("p")) for r in rows]
             if rows:
                 from config.settings import settings
                 chk["table"] = bbcards.compare_table(rows, m["home"], m["away"])
@@ -381,7 +384,8 @@ class MatchTracker:
         try:                                   # structured copy for the FinalPoint service (off unless FP_FEED_URL is set)
             from config.settings import settings
             from core import fpfeed
-            fpfeed.emit("BB", m, chk, dict(soft=chk.get("soft"), pin=chk.get("pin")), settings.MIN_EV)
+            fpfeed.emit("BB", m, chk, dict(soft=chk.get("soft"), pin=chk.get("pin"), rows=getattr(self, "_fprows", None)), settings.MIN_EV)
+            self._fprows = None
         except Exception as e:
             log.warning("feed not queued: %s", e)
         return chk
