@@ -448,7 +448,9 @@ class FinalPoint:
             e = board.entry(rk, rec, (old or {}).get("seen") or int(time.time()))
             st["g"][rk] = e
             st["dirty"] = True
-            urgent = old is None or old.get("st") != e["st"] or old.get("card") != e["card"] or old.get("end") != e.get("end")
+            keys = lambda x: ([p.get("pkey") for p in x.get("val") or []], [p.get("pkey") for p in x.get("lead") or []])
+            urgent = (old is None or old.get("st") != e["st"] or old.get("card") != e["card"] or old.get("end") != e.get("end")
+                      or old.get("early") != e.get("early") or keys(old) != keys(e))
             self._bd_flush(day, st, urgent)
         except Exception as ex:
             log.warning("board not updated: %s", ex)

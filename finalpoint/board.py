@@ -48,6 +48,7 @@ def entry(rk, rec, seen):
     keep = ("d", "odds", "e", "pkey")
     e = dict(rk=rk, tag=rec.get("tag"), home=rec.get("home"), away=rec.get("away"), tip=rec.get("tip"), seen=seen, st=_status(rec, c), ck=c.get("t"),
              card=(rec.get("fp") or [None])[0],
+             early=bool(rec.get("tip") and c.get("t") and float(rec["tip"]) - float(c["t"]) > 3900 and not rec.get("end")),
              val=[{k: p.get(k) for k in keep} for p in (c.get("picks") or []) if p.get("tier") == 0],
              lead=[{k: p.get(k) for k in keep} for p in (c.get("picks") or []) if p.get("tier") == 1])
     end = rec.get("end")
@@ -134,11 +135,12 @@ def render_picks(day, ents, base="", other=None, record=None, now=None):
             for e in sorted(g, key=lambda e: e.get("tip") or 0):
                 for p in e[key]:
                     res = MARK.get((e.get("res") or {}).get(p.get("pkey")), "")
-                    lines.append("%s %s · %s · %.2f · %+.1f%%%s · as of %s" % (
+                    lines.append("%s %s · %s · %.2f · %+.1f%%%s · as of %s%s" % (
                         wat(e["tip"]).strftime("%H:%M") if e.get("tip") else "--:--", _a(base, e.get("card"), _title(e)), E(str(p.get("d"))),
-                        float(p.get("odds") or 0), 100 * float(p.get("e") or 0), res, wat(e["ck"]).strftime("%H:%M") if e.get("ck") else "--:--"))
+                        float(p.get("odds") or 0), 100 * float(p.get("e") or 0), res, wat(e["ck"]).strftime("%H:%M") if e.get("ck") else "--:--",
+                        " · early" if e.get("early") else ""))
 
     section("VALIDATED", "val", "")
     section("LEADS", "lead", "(not bets yet)")
-    lines += ["", "<i>Open the card and read its latest block before you play. A pick that shows WITHDRAWN is off.</i>"]
+    lines += ["", "<i>early = last checked more than 1 hour before kickoff: wait for the T-60 / T-30 check. Open the card and read its latest block before you play. A pick that shows WITHDRAWN is off.</i>"]
     return _pages(head, lines)

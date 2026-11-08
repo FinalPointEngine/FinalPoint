@@ -368,3 +368,16 @@ def test_the_wide_gap_note_between_moneyline_and_spread_is_only_for_spread_sport
     soft = {"ml": {"home": 1.49, "away": 2.7}, "ah": {"-1.5": {"home": 2.5, "away": 1.54}}}
     fp.feed(_payload(0, soft=soft, pin=pin))
     assert "disagree by a wide margin" not in posts[-1]
+
+
+def test_picks_validated_more_than_an_hour_before_kickoff_are_marked_early_on_the_board(monkeypatch):
+    monkeypatch.setenv("FP_BOARD_MIN_SEC", "0")
+    fp, store, boards = _fpb()
+    _valid_feed(fp, "b", n=2)                        # last check is 2 h before the 2000000000 kick-off
+    txt = next(b for b in reversed(boards) if "LEADS</b>" in b[0].split("\n")[0])[0]
+    assert "· early" in txt
+    soft = json.loads(json.dumps(SOFT)); soft["ah"]["-1.5"]["away"] = 1.62
+    pl = _payload(2, soft=soft, label="Check: T-15"); pl["chk"]["t"] = 2000000000 - 900; pl["key"] = "b"
+    fp.feed(pl)
+    txt = next(b for b in reversed(boards) if "LEADS</b>" in b[0].split("\n")[0])[0]
+    assert "Calgary +1.5" in txt and "· early" not in txt.split("<i>early")[0]
