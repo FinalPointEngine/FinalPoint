@@ -64,6 +64,8 @@ def find_score(tag, home, away, tip, getter=None, second=None):
                 continue
             for t, _lg, h, a, hg, ag in rows:
                 if abs(t - tip) <= 8 * 3600 and _same(h, home) and _same(a, away):
+                    if tag == "FB" and _lg == "ET":
+                        return None                       # extra time / penalties: the feed score is not the 90-minute score SportyBet settles on
                     return int(hg), int(ag)
     return None
 

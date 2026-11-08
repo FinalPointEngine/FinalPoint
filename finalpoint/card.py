@@ -65,7 +65,7 @@ def row_label(mkt, line, sel, home, away, last=False):
     if mkt in ("ah", "sh"):
         if line is None:
             return str(sel)
-        ln = "%+g" % (line if sel == "home" else -line)
+        ln = "0" if float(line) == 0 else "%+g" % (line if sel == "home" else -line)          # a 0 line is draw-no-bet: never "-0"
         nm = _pair(home, away, last)[0 if sel == "home" else 1]
         return "%s %s" % (nm[:max(4, 12 - len(ln) - 1)], ln)
     if mkt == "total":

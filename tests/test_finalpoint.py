@@ -516,3 +516,23 @@ def test_long_boards_hold_every_game_and_link_previous_and_next():
     pp = board.render_picks("2033-05-18", lp, "https://t.me/c/1/", ids=[7, 8, 9])
     assert len(pp) >= 2 and all(len(p) < 4000 for p in pp) and sum(x.count("Over 2.5") for x in pp) == 80
     assert "Next" in pp[0] and "Previous" in pp[-1]
+
+
+def test_football_after_extra_time_is_not_graded_from_the_feed_score():
+    from thirdeye import sources as ts
+    from finalpoint import results as rs
+    ev = lambda nm: {"events": [{"date": "2033-05-18T18:00:00Z", "competitions": [{"status": {"type": {"completed": True, "name": nm}},
+         "competitors": [{"homeAway": "home", "team": {"displayName": "Roma"}, "score": "2"}, {"homeAway": "away", "team": {"displayName": "Lazio"}, "score": "1"}]}]}]}
+    t = 2000052000
+    for nm, want in (("STATUS_FINAL", (2, 1)), ("STATUS_FINAL_AET", None), ("STATUS_FINAL_PEN", None)):
+        rows = ts.parse_espn(ev(nm))
+        rs._cache.clear()
+        assert rs.find_score("FB", "Roma", "Lazio", t, getter=lambda s, d: rows, second=None) == want
+    rs._cache.clear()
+
+
+def test_zero_handicap_is_written_0_on_both_sides_never_minus_0():
+    from finalpoint import card
+    assert card.row_label("ah", 0.0, "home", "SK Rotor Volgograd", "Leningradets") == "Rotor 0"
+    assert card.row_label("ah", 0.0, "away", "SK Rotor Volgograd", "Leningradets") == "Leningrade 0"
+    assert card.row_label("ah", -0.0, "away", "A B", "C D").endswith(" 0") and card.row_label("ah", 0.5, "away", "A B", "C D").endswith("-0.5")

@@ -54,7 +54,9 @@ def parse_espn(js):
                 continue
             side = {c["homeAway"]: c for c in comp["competitors"]}
             t = int(datetime.fromisoformat(e["date"].replace("Z", "+00:00")).timestamp())
-            rows.append([t, "", side["home"]["team"]["displayName"], side["away"]["team"]["displayName"], int(float(side["home"]["score"])),
+            nm = str(((comp.get("status") or e.get("status") or {}).get("type") or {}).get("name", ""))
+            lg = "ET" if nm.endswith(("_AET", "_PEN", "_PENALTIES")) else ""       # decided after 90 minutes: the score includes extra time
+            rows.append([t, lg, side["home"]["team"]["displayName"], side["away"]["team"]["displayName"], int(float(side["home"]["score"])),
                          int(float(side["away"]["score"]))])
         except (KeyError, TypeError, ValueError, IndexError):
             continue
