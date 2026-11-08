@@ -62,7 +62,17 @@ class FinalPointRuntime:
                     offset = u["update_id"] + 1
                     m = u.get("message") or {}
                     txt = (m.get("text") or "").strip()
-                    if str((m.get("chat") or {}).get("id")) != str(chat) or not txt.lower().startswith("/result"):
+                    low = txt.lower()
+                    if str((m.get("chat") or {}).get("id")) != str(chat) or not (low.startswith("/result") or low.startswith("/sources")):
+                        continue
+                    if low.startswith("/sources"):
+                        from finalpoint import sources
+                        try:
+                            out = sources.probe()
+                        except Exception as e:
+                            out = "Source check failed: %s" % str(e)[:120]
+                        tn.post_json(tn.API.format(token=settings.TELEGRAM_TOKEN, method="sendMessage"),
+                                     dict(chat_id=chat, text=out, parse_mode="HTML", reply_to_message_id=m.get("message_id"), allow_sending_without_reply=True))
                         continue
                     mt = self.RESULT.match(txt)
                     out = (self.fp.manual_result(mt.group(1), mt.group(2), int(mt.group(3)), int(mt.group(4))) if mt else

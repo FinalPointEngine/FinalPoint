@@ -23,7 +23,7 @@ _cache = {}
 
 
 def _day_rows(sport, date, getter):
-    k = (sport, date)
+    k = (sport, date, id(getter))
     hit = _cache.get(k)
     if hit and time.time() - hit[0] < 600:
         return hit[1]
@@ -42,24 +42,29 @@ def _same(a, b):
     return bool(small) and small <= big and any(len(w) >= 4 for w in small) and names.markers(a) == names.markers(b)
 
 
-def find_score(tag, home, away, tip, getter=None):
-    """(home score, away score) of the finished game or None. Same two teams, started within 8 hours of the expected time."""
-    from football import names
+def find_score(tag, home, away, tip, getter=None, second=None):
+    """(home score, away score) of the finished game or None. Same two teams, started within 8 hours of the expected time.
+    ThirdEye's feeds first; when they find nothing, the second source (finalpoint.sources) is asked."""
     if getter is None:
         from thirdeye.sources import fetch_day as getter
+        if second is None:
+            from finalpoint.sources import tsdb_rows as second
     sport = SPORT.get(tag)
     if not sport or not tip:
         return None
     d0 = datetime.fromtimestamp(tip, tz=timezone.utc)
-    for d in (d0, d0 + timedelta(days=1)):
-        try:
-            rows = _day_rows(sport, d.strftime("%Y-%m-%d"), getter)
-        except Exception as e:
-            log.info("no result source for %s: %s", sport, str(e)[:80])
+    for src in (getter, second):
+        if src is None:
             continue
-        for t, _lg, h, a, hg, ag in rows:
-            if abs(t - tip) <= 8 * 3600 and _same(h, home) and _same(a, away):
-                return int(hg), int(ag)
+        for d in (d0, d0 + timedelta(days=1)):
+            try:
+                rows = _day_rows(sport, d.strftime("%Y-%m-%d"), src)
+            except Exception as e:
+                log.info("no result source for %s: %s", sport, str(e)[:80])
+                continue
+            for t, _lg, h, a, hg, ag in rows:
+                if abs(t - tip) <= 8 * 3600 and _same(h, home) and _same(a, away):
+                    return int(hg), int(ag)
     return None
 
 

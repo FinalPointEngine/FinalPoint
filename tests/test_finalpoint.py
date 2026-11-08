@@ -399,3 +399,38 @@ def test_tennis_reason_does_not_quote_a_score_and_lesson_hides_the_watch_record(
     assert rs.reason("TN", pk, "won", 0, 1, "Claire Liu", "Alexandra Eala") == "Alexandra Eala won the match."
     txt = rs.lesson([dict(tier=3, status="lost")], {"WATCH": dict(w=89, l=8, u=17.7), "VALIDATED": dict(w=1, l=0, u=0.9)})
     assert "WATCH 89W" not in txt and "VALIDATED 1W-0L" in txt
+
+
+def test_second_result_source_is_asked_only_when_the_first_finds_nothing_and_parses_finished_games():
+    from finalpoint import results as rs, sources
+    sample = {"events": [
+        {"strStatus": "Match Finished", "intHomeScore": "3", "intAwayScore": "2", "strTimestamp": "2033-05-18T13:00:00", "strLeague": "KHL",
+         "strHomeTeam": "Amur Khabarovsk", "strAwayTeam": "HC Barys"},
+        {"strStatus": "Not Started", "intHomeScore": None, "intAwayScore": None, "strTimestamp": "2033-05-18T15:00:00", "strHomeTeam": "X", "strAwayTeam": "Y"},
+        {"strStatus": "Match Finished", "intHomeScore": "", "intAwayScore": "", "strTimestamp": "2033-05-18T15:00:00", "strHomeTeam": "X", "strAwayTeam": "Y"}]}
+    rows = sources.tsdb_rows("hockey", "2033-05-18", getter=lambda url: sample)
+    assert len(rows) == 1 and rows[0][2:] == ["Amur Khabarovsk", "HC Barys", 3, 2] and sources.tsdb_rows("tennis", "2033-05-18", getter=lambda u: sample) == []
+    tip = rows[0][0]
+    rs._cache.clear()
+    assert rs.find_score("IH", "Amur Khabarovsk", "HC Barys", tip, getter=lambda s, d: [], second=lambda s, d: rows) == (3, 2)
+    first = [[tip, "KHL", "Amur Khabarovsk", "HC Barys", 9, 9]]
+    rs._cache.clear()
+    assert rs.find_score("IH", "Amur Khabarovsk", "HC Barys", tip, getter=lambda s, d: first, second=lambda s, d: rows) == (9, 9)
+
+    def boom(s, d):
+        raise OSError("403")
+    rs._cache.clear()
+    assert rs.find_score("IH", "Amur Khabarovsk", "HC Barys", tip, getter=boom, second=lambda s, d: rows) == (3, 2)
+    rs._cache.clear()
+
+
+def test_probe_reports_each_source_per_sport_and_never_raises():
+    from finalpoint import sources
+    def get(url, timeout=20):
+        if "sofascore" in url:
+            raise OSError("HTTP Error 403: Forbidden")
+        if "espn" in url:
+            return {"events": []}
+        return {"events": [{"strStatus": "FT", "intHomeScore": "1", "intAwayScore": "0", "strTimestamp": "2033-05-18T13:00:00", "strHomeTeam": "A", "strAwayTeam": "B"}]}
+    txt = sources.probe("2033-05-18", getter=get, pause=0)
+    assert "hockey: SofaScore blocked" in txt and "ESPN 0" in txt and "TheSportsDB 1" in txt and "tennis: SofaScore blocked" in txt and "/result" in txt
