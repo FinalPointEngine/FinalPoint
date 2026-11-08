@@ -29,7 +29,7 @@ def TOTAL_GAP():
 
 def MIN_ODDS():
     try:
-        return float(os.environ.get("FP_MIN_ODDS", "1.12"))
+        return float(os.environ.get("FP_MIN_ODDS", "1.20"))
     except ValueError:
         return 1.12
 
