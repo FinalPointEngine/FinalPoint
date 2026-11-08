@@ -79,6 +79,51 @@ def mirror_card(m: dict, text: str, chat: str = None, title: str = "MATCH TRACKE
         log.warning("FinalPoint card not sent: %s", str(e).replace(settings.TELEGRAM_TOKEN or "~", "***")[:160])
 
 
+def board_pages(chat, texts, ids=None, hs=None, pin=True):
+    """Keep a pinned board of one or more messages up to date: edit a page in place when its text changed, send it when it is new.
+    -> (ids, hashes, ok). Never raises. A deleted message is replaced by a new one."""
+    import hashlib
+    ids, hs, ok = list(ids or []), list(hs or []), True
+    try:
+        for i, pg in enumerate(texts):
+            h = hashlib.md5(pg.encode()).hexdigest()[:12]
+            if i < len(ids) and hs[i] == h:
+                continue
+            sent = False
+            if i < len(ids):
+                try:
+                    post_json(API.format(token=settings.TELEGRAM_TOKEN, method="editMessageText"),
+                              dict(chat_id=chat, message_id=ids[i], text=pg[:4000], parse_mode="HTML", disable_web_page_preview=True))
+                    sent = True
+                except Exception as e:
+                    if "not modified" in str(e):
+                        sent = True
+                    elif "not found" not in str(e).lower():
+                        raise
+                if sent:
+                    hs[i] = h
+                    continue
+            out = post_json(API.format(token=settings.TELEGRAM_TOKEN, method="sendMessage"),
+                            dict(chat_id=chat, text=pg[:4000], parse_mode="HTML", disable_notification=True, disable_web_page_preview=True))
+            mid = ((out or {}).get("result") or {}).get("message_id")
+            if mid:
+                if i < len(ids):
+                    ids[i], hs[i] = mid, h
+                else:
+                    ids.append(mid)
+                    hs.append(h)
+                if i == 0 and pin:
+                    try:
+                        post_json(API.format(token=settings.TELEGRAM_TOKEN, method="pinChatMessage"),
+                                  dict(chat_id=chat, message_id=mid, disable_notification=True))
+                    except Exception:
+                        pass
+    except Exception as e:
+        ok = False
+        log.warning("FinalPoint board not sent: %s", str(e).replace(settings.TELEGRAM_TOKEN or "~", "***")[:160])
+    return ids, hs, ok
+
+
 def api(method: str, **payload):
     if not settings.TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")

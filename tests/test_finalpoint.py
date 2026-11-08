@@ -86,7 +86,7 @@ def test_top_three_is_always_filled_and_tagged_even_with_no_edge():
     fp.feed(_payload(0, soft=soft))
     rec = json.loads(store["fp:IH:m1"])
     assert len(rec["picks"]) == 3 and all(p["call"] in ("", "WATCH") for p in rec["picks"])
-    assert "WATCH (closest)" in posts[-1] and "Status:</b> WATCH (no edge yet)" in posts[-1]
+    assert "[C]" in posts[-1] and "Status:</b> WATCH (no edge yet)" in posts[-1]
     assert len({(p["mkt"], p["line"]) for p in rec["picks"]}) == 3                     # one side per line
 
 
@@ -128,7 +128,7 @@ def test_no_pinnacle_prices_sportybets_other_lines_from_its_own_and_never_valida
         fp.feed(_payload(i, soft=soft, pin=None, label="Check %d" % (i + 1)))
     t = html.unescape(posts[-1])
     rec = json.loads(store["fp:IH:m1"])
-    assert rec["checks"][-1]["derived"] and "model fair" in t and "[derived]" in t
+    assert rec["checks"][-1]["derived"] and "model fair" in t and "[D]" in t
     assert "priced SportyBet's other lines from its own" in t and "Status:</b> VALIDATED" not in t
     assert rec["val"] == {}
 
@@ -210,3 +210,119 @@ def test_checks_saved_by_the_older_layout_render_as_one_line_not_empty_blocks():
     fp.feed(_payload(1, label="Check 2"))
     t = posts[-1]
     assert "Seen before the new layout" in t and t.count("<b>Status:</b>") == 1 and "<b>Check 2</b>" in t
+
+
+def test_table_rows_are_one_short_line_with_letter_tags_and_a_blank_line_before_next_check():
+    fp, store, posts = _fp()
+    soft = json.loads(json.dumps(SOFT))
+    soft["ah"]["-1.5"]["away"] = 1.62
+    pl = _payload(0, soft=soft)
+    pl["home"], pl["away"] = "Macarthur FC", "Brisbane Roar FC"
+    pl["chk"]["nxt"] = 2000003600
+    fp.feed(pl)
+    t = posts[-1]
+    pre = t[t.index("<pre>") + 5:t.index("</pre>")]
+    assert all(len(x) <= 38 for x in pre.split("\n")), pre
+    assert "Brisban +1.5" in pre or "Macarth" in pre
+    assert "\n\nNext check:" in t and "★ top 3" in t.split("━")[0]
+    assert "(closest)" not in pre and "derived" not in pre
+
+
+def test_lines_where_one_side_pays_almost_nothing_are_never_ranked_or_shown():
+    fp, store, posts = _fp()
+    soft = json.loads(json.dumps(SOFT))
+    soft["total"]["0.5"] = {"over": 1.04, "under": 10.5}
+    for i in range(2):
+        fp.feed(_payload(i, soft=soft, pin=None, label="Check %d" % (i + 1)))
+    rec = json.loads(store["fp:IH:m1"])
+    assert all(p["line"] != 0.5 for p in rec["picks"]) and "0.5" not in posts[-1].split("<pre>")[-1]
+
+
+def _fpb(chat="-1004303651954"):
+    store, posts, boards = {}, [], []
+    state = {}
+
+    def mirror(rec, text):
+        rec.setdefault("fp", [100 + len(store)] if not rec.get("fp") else rec["fp"])
+        posts.append(text)
+
+    def bd(texts, ids, hs):
+        boards.append(list(texts))
+        return (ids or [900 + len(boards[-1])]), ["h"], True
+
+    fp = FinalPoint(lambda k: store.get(k), lambda k, v: store.__setitem__(k, v), mirror, boards=bd, chat=chat)
+    return fp, store, boards
+
+
+def _valid_feed(fp, key, tag="IH", home="Seattle", away="Calgary", tip=2000000000, n=2):
+    soft = json.loads(json.dumps(SOFT))
+    soft["ah"]["-1.5"]["away"] = 1.62
+    for i in range(n):
+        pl = _payload(i, soft=soft, label="Check %d" % (i + 1), tag=tag)
+        pl.update(key=key, home=home, away=away, tip=tip)
+        fp.feed(pl)
+
+
+def test_boards_list_every_game_by_sport_newest_last_and_validated_and_leads_separately(monkeypatch):
+    monkeypatch.setenv("FP_BOARD_MIN_SEC", "0")
+    from finalpoint import board
+    fp, store, boards = _fpb()
+    pl = _payload(0)
+    pl.update(key="a", home="Roma", away="Lazio", tag="IH")
+    fp.feed(pl)                                                                  # a game with no value: only on Today's Games
+    _valid_feed(fp, "b", home="Seattle", away="Calgary", n=2)                     # a VALIDATED pick
+    games = "\n".join(boards[-1])
+    picks_txt = None
+    for b in boards:
+        if "VALIDATED &amp; LEADS" in b[0]:
+            picks_txt = b[0]
+    last_games = next(b for b in reversed(boards) if "TODAY'S GAMES" in b[0])[0]
+    last_picks = next(b for b in reversed(boards) if "VALIDATED &amp; LEADS" in b[0])[0]
+    assert "<b>ICE HOCKEY</b> · 2" in last_games and last_games.index("Roma v Lazio") < last_games.index("Seattle v Calgary")
+    assert "https://t.me/c/4303651954/" in last_games and "Jump:" in last_games and "VALIDATED" in last_games
+    assert "Calgary +1.5" in last_picks and "Roma" not in last_picks and "as of" in last_picks
+    assert board.day_of(2000000000) == "2033-05-18"
+
+
+def test_withdrawn_pick_leaves_the_validated_list_and_finished_games_show_result(monkeypatch):
+    monkeypatch.setenv("FP_BOARD_MIN_SEC", "0")
+    fp, store, boards = _fpb()
+    _valid_feed(fp, "b", n=2)
+    soft = json.loads(json.dumps(SOFT))
+    soft["ah"]["-1.5"]["away"] = 1.40
+    pl = _payload(2, soft=soft, label="Check 3")
+    pl.update(key="b")
+    fp.feed(pl)
+    last_picks = next(b for b in reversed(boards) if "VALIDATED &amp; LEADS" in b[0])[0]
+    assert "Calgary +1.5" not in last_picks.split("LEADS")[0].split("<b>VALIDATED</b>")[-1] or "None yet today." in last_picks
+    last_games = next(b for b in reversed(boards) if "TODAY'S GAMES" in b[0])[0]
+    assert "WITHDRAWN" in last_games
+    assert fp.manual_result("Seattle", "Calgary", 3, 2).startswith("Saved")
+    last_games = next(b for b in reversed(boards) if "TODAY'S GAMES" in b[0])[0]
+    assert "FT Seattle 3-2 Calgary" in last_games
+
+
+def test_boards_split_into_pages_when_the_day_is_long_and_are_off_without_a_chat():
+    from finalpoint import board
+    ents = [dict(rk=str(i), tag="FB", home="Team Number %d" % i, away="Other Team %d" % i, tip=2000000000 + i, seen=i, st="WATCH", card=i + 1) for i in range(120)]
+    pages = board.render_games("2033-05-18", ents, "https://t.me/c/1/")
+    assert len(pages) >= 2 and all(len(p) < 4000 for p in pages) and "page 2" in pages[1]
+    fp = FinalPoint(lambda k: None, lambda k, v: None, lambda r, t: None)
+    assert fp.board_tick() == 0
+    assert board.link_base("-1004303651954") == "https://t.me/c/4303651954/" and board.link_base("@x") == ""
+
+
+def test_a_new_game_is_not_held_back_for_the_routine_refresh(monkeypatch):
+    monkeypatch.setenv("FP_BOARD_MIN_SEC", "30")
+    monkeypatch.setenv("FP_BOARD_SEC", "900")
+    fp, store, boards = _fpb()
+    pl = _payload(0); pl.update(key="a", home="Roma", away="Lazio")
+    fp.feed(pl)
+    pl = _payload(0); pl.update(key="b", home="Seattle", away="Calgary")
+    fp.feed(pl)                                          # inside the 30 s gap: waits, but the tick flushes it as soon as the gap has passed
+    import time as _t
+    st = json.loads(store["fp_bd:2033-05-18"])
+    st["t"] = _t.time() - 40
+    store["fp_bd:2033-05-18"] = json.dumps(st)
+    assert fp.board_tick(now=2000000000 - 7200) == 1
+    assert "Seattle v Calgary" in next(b for b in reversed(boards) if "TODAY'S GAMES" in b[0])[0]

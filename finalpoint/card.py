@@ -28,13 +28,23 @@ def short(name, n=12):
     return name if len(name) <= n else name[:n].rstrip()
 
 
+def _pair(home, away):
+    """One short word per team for the price table: the first word, or the last when both start the same ('Real Madrid' / 'Real Sociedad')."""
+    h, a = str(home or "").split(), str(away or "").split()
+    if h and a and h[0].lower() == a[0].lower():
+        return h[-1], a[-1]
+    return (h[0] if h else "Home"), (a[0] if a else "Away")
+
+
 def row_label(mkt, line, sel, home, away):
     if mkt in ("1x2", "ml"):
         return {"home": short(home), "away": short(away), "draw": "Draw"}.get(sel, str(sel))
     if mkt in ("ah", "sh"):
         if line is None:
             return str(sel)
-        return "%s %+g" % (short(home), line) if sel == "home" else "%s %+g" % (short(away), -line)
+        ln = "%+g" % (line if sel == "home" else -line)
+        nm = _pair(home, away)[0 if sel == "home" else 1]
+        return "%s %s" % (nm[:max(4, 12 - len(ln) - 1)], ln)
     if mkt == "total":
         return "%s %g" % (str(sel).title(), line)
     if mkt == "es":
@@ -52,21 +62,30 @@ def group_title(tag, mkt, closest):
     return MKT_NAME.get(mkt, str(mkt)).upper()
 
 
+MARK = {"VALIDATED": "V", "POSSIBLE": "P", "WITHDRAWN": "W", "WATCH": "C"}
+LEGEND = "★ top 3 · V validated · P possible · C closest to value · D derived · M model-priced"
+
+
 def render_table(groups, derived=False):
-    """groups: [{title, rows:[{l, o, f, e, s, t, m}]}] -> html block. Monospace so the columns line up in Telegram."""
+    """groups: [{title, rows:[{l, o, f, e, s, t, m}]}] -> html block. Monospace, one short line per market, so nothing wraps on a phone."""
     if not groups:
         return ""
     w = max(len(r["l"]) for g in groups for r in g["rows"])
-    lines = []
+    lines, last = [], None
     for g in groups:
-        lines.append(g["title"])
+        if g["title"] != last:
+            lines.append(g["title"])
+        last = g["title"]
         for r in g["rows"]:
-            tail = ""
-            if r.get("t"):
-                tail = "  " + r["t"]
+            tags = ""
+            w0 = str(r.get("t") or "").split(" ")[0]
+            k = ("C" if r.get("s") else "") if w0 in ("WATCH", "") else MARK.get(w0, "")
+            if k:
+                tags += "[%s]" % k
             if r.get("m"):
-                tail += " [%s]" % r["m"]
-            lines.append("%s%s  %5.2f | %5.2f | %+5.1f%%%s" % ("★ " if r.get("s") else "  ", r["l"].ljust(w), r["o"], r["f"], 100 * r["e"], tail))
+                tags += "[%s]" % ("D" if r["m"] == "derived" else "M")
+            lines.append("%s%s %s|%s|%s%s" % ("★" if r.get("s") else " ", r["l"].ljust(w), "%.2f" % r["o"], "%.2f" % r["f"],
+                                              "%+.1f%%" % (100 * r["e"]), (" " + tags) if tags else ""))
     head = "SportyBet | %s | edge" % ("model fair" if derived else "Pinnacle fair")
     return "<i>%s</i>\n<pre>%s</pre>" % (head, E("\n".join(lines)))
 
@@ -210,6 +229,7 @@ def block(c):
     if c.get("tbl"):
         L.append(render_table(c["tbl"], bool(c.get("derived"))))
     if c.get("nxt"):
+        L.append("")
         L.append("Next check: %s" % wat(c["nxt"]).strftime("%H:%M"))
     return L
 
@@ -226,7 +246,7 @@ def ended(end):
 
 
 def render(rec):
-    L = [x for x in header(rec) if x]
+    L = [x for x in header(rec) if x] + ["<i>%s</i>" % LEGEND]
     for c in rec["checks"]:
         L += block(c)
     if rec.get("end"):

@@ -7,11 +7,12 @@ from __future__ import annotations
 import html
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from finalpoint import card, ladder as ld, results, rules
+from finalpoint import board, card, ladder as ld, results, rules
 from finalpoint.rules import describe, edge
 
 log = logging.getLogger("finalpoint")
@@ -19,6 +20,13 @@ ICON = {"FB": "⚽", "TN": "🎾", "IH": "🏒", "AF": "🏈", "HB": "🤾", "VB
 SEP = "━" * 15
 LATE = ("final", "t15", "last")
 MAX_LIST = 5
+def MIN_ODDS():
+    try:
+        return float(os.environ.get("FP_MIN_ODDS", "1.12"))
+    except ValueError:
+        return 1.12
+
+
 BB_MKT = {"h2h": "ml", "spreads": "ah", "totals": "total"}
 
 
@@ -36,9 +44,10 @@ def _label(x):
 
 
 class FinalPoint:
-    def __init__(self, load, save, mirror):
+    def __init__(self, load, save, mirror, boards=None, chat=None):
         """load(key) -> str|None, save(key, str), mirror(rec, text) posts / edits the card of one match."""
         self._load, self._save, self._post = load, save, mirror
+        self._boards, self._base = boards, board.link_base(chat)          # boards(texts, ids, hashes) -> (ids, hashes, ok), or None: off
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- store
@@ -88,6 +97,7 @@ class FinalPoint:
             log.warning("card not posted: %s", e)
         self._wr(rk, rec)
         self._index(rk, rec.get("tip"))
+        self._bd_touch(rk, rec)
         return {"ok": True}
 
     # ---------------------------------------------------------------- rows of one check
@@ -171,6 +181,7 @@ class FinalPoint:
             d_rows = self._derived(tag, soft)
             if d_rows:
                 rows, c["derived"] = d_rows, True
+        rows = [r for r in rows if r.get("p") and 0.005 < r["p"] < 0.995]      # a model chance of 0% or 100% is no price at all
         for r in rows:
             r["pkey"] = _pk(r["mkt"], r["line"], r["sel"])
             r.setdefault("derived", False)
@@ -220,6 +231,11 @@ class FinalPoint:
             out.append(dict(pkey=k, mkt=r["mkt"], line=r["line"], sel=r["sel"], d=describe(r["mkt"], r["line"], r["sel"], home, away),
                             odds=round(r["odds"], 2), fair=round(1 / r["p"], 2), e=round(e, 4), call=call, note=note, exact=r["exact"],
                             derived=r["derived"]))
+        lo = {}                                                       # a line where one side pays almost nothing (Over 0.5 at 1.04) tells us nothing
+        for o in out:
+            g = (o["mkt"], o["line"])
+            lo[g] = min(lo.get(g, 99.0), o["odds"])
+        out = [o for o in out if lo[(o["mkt"], o["line"])] >= MIN_ODDS()]
         top = self._top3(out)
         for i, o in enumerate(top):
             o["star"] = i + 1
@@ -393,6 +409,57 @@ class FinalPoint:
         except Exception as e:
             log.warning("result not posted: %s", e)
         self._wr("fp:%s:%s" % (rec["tag"], rec["key"]), rec)
+        self._bd_touch("fp:%s:%s" % (rec["tag"], rec["key"]), rec)
+
+    # ---------------------------------------------------------------- the two daily boards
+    def _bd_touch(self, rk, rec):
+        if not self._boards or not rec.get("tip"):
+            return
+        try:
+            day = board.day_of(rec["tip"])
+            st = self._rd("fp_bd:" + day, {"g": {}, "b1": [[], []], "b2": [[], []], "t": 0})
+            old = st["g"].get(rk)
+            e = board.entry(rk, rec, (old or {}).get("seen") or int(time.time()))
+            st["g"][rk] = e
+            st["dirty"] = True
+            urgent = old is None or old.get("st") != e["st"] or old.get("card") != e["card"] or old.get("end") != e.get("end")
+            self._bd_flush(day, st, urgent)
+        except Exception as ex:
+            log.warning("board not updated: %s", ex)
+
+    def _bd_flush(self, day, st, urgent=False):
+        if urgent:
+            st["urg"] = True                                  # a new game / a status change: do not wait for the routine refresh
+        gap = float(os.environ.get("FP_BOARD_MIN_SEC", "30")) if st.get("urg") else float(os.environ.get("FP_BOARD_SEC", "900"))
+        now = time.time()
+        if not st.get("dirty") or now - st.get("t", 0) < gap:
+            self._wr("fp_bd:" + day, st)
+            return
+        ents = list(st["g"].values())
+        rec2 = (self._rd("fp_stats", {}) or {}).get("VALIDATED") or {}
+        b1, b2 = st["b1"], st["b2"]
+        i2, h2, ok2 = self._boards(board.render_picks(day, ents, self._base, (b1[0] or [None])[0], rec2, now), b2[0], b2[1])
+        st["b2"] = [i2, h2]
+        i1, h1, ok1 = self._boards(board.render_games(day, ents, self._base, (i2 or [None])[0], now), b1[0], b1[1])
+        st["b1"] = [i1, h1]
+        if ok1 and ok2:
+            st["dirty"], st["urg"] = False, False
+            st["t"] = now
+        self._wr("fp_bd:" + day, st)
+
+    def board_tick(self, now=None) -> int:
+        """Called every few minutes by the runtime: refresh today's and tomorrow's boards if something changed since the last edit."""
+        if not self._boards:
+            return 0
+        now = now or time.time()
+        n = 0
+        with self._lock:
+            for d in {board.day_of(now), board.day_of(now + 86400)}:
+                st = self._rd("fp_bd:" + d, None)
+                if st and st.get("dirty"):
+                    self._bd_flush(d, st, False)
+                    n += 1
+        return n
 
     def settle_due(self, getter=None, now=None) -> int:
         """Look for the final score of every match that should be over. Called by the runtime every few minutes."""
