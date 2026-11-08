@@ -61,7 +61,7 @@ def probe(day=None, getter=None, pause=2.0):
             try:
                 n = 0
                 for p in paths:
-                    js = get("https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s&limit=1000" % (p, day.replace("-", "")))
+                    js = get(ts.espn_url(p, day))
                     n += len(ts.parse_espn_tennis(js) if sport == "tennis" else ts.parse_espn(js))
                 bits.append("ESPN %d" % n)
             except Exception as e:

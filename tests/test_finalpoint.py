@@ -306,7 +306,7 @@ def test_boards_split_into_pages_when_the_day_is_long_and_are_off_without_a_chat
     from finalpoint import board
     ents = [dict(rk=str(i), tag="FB", home="Team Number %d" % i, away="Other Team %d" % i, tip=2000000000 + i, seen=i, st="WATCH", card=i + 1) for i in range(120)]
     pages = board.render_games("2033-05-18", ents, "https://t.me/c/1/")
-    assert len(pages) >= 2 and all(len(p) < 4000 for p in pages) and "page 2" in pages[1]
+    assert len(pages) >= 2 and all(len(p) < 4000 for p in pages) and "page 2/" in pages[1]
     fp = FinalPoint(lambda k: None, lambda k, v: None, lambda r, t: None)
     assert fp.board_tick() == 0
     assert board.link_base("-1004303651954") == "https://t.me/c/4303651954/" and board.link_base("@x") == ""
@@ -434,3 +434,85 @@ def test_probe_reports_each_source_per_sport_and_never_raises():
         return {"events": [{"strStatus": "FT", "intHomeScore": "1", "intAwayScore": "0", "strTimestamp": "2033-05-18T13:00:00", "strHomeTeam": "A", "strAwayTeam": "B"}]}
     txt = sources.probe("2033-05-18", getter=get, pause=0)
     assert "hockey: SofaScore blocked" in txt and "ESPN 0" in txt and "TheSportsDB 1" in txt and "tennis: SofaScore blocked" in txt and "/result" in txt
+
+
+def test_espn_urls_ask_for_all_of_division_one_and_results_look_a_day_either_side():
+    from thirdeye import sources as ts
+    from finalpoint import results as rs
+    assert "groups=80" in ts.espn_url("football/college-football", "2026-11-07") and "dates=20261107" in ts.espn_url("football/nfl", "2026-11-07")
+    assert "groups" not in ts.espn_url("hockey/nhl", "2026-11-07") and "football/college-football" in ts.ESPN["afootball"]
+    seen = []
+    rs._cache.clear()
+    rs.find_score("AF", "A", "B", 2000000000, getter=lambda s, d: seen.append(d) or [], second=None)
+    assert len(seen) == 3 and seen == sorted(seen)
+    rs._cache.clear()
+
+
+def _espn_tennis(a, b, la, lb, a_won, status="STATUS_FINAL", date="2033-05-18T07:00:00Z"):
+    ath = lambda n: {"displayName": n}
+    return {"events": [{"date": date, "name": "WTA Hong Kong", "groupings": [{"competitions": [{
+        "date": date, "status": {"type": {"name": status, "completed": True}},
+        "competitors": [{"order": 1, "winner": a_won, "athlete": ath(a), "linescores": [{"value": v} for v in la]},
+                        {"order": 2, "winner": not a_won, "athlete": ath(b), "linescores": [{"value": v} for v in lb]}]}]}]}]}
+
+
+def test_tennis_sets_and_games_come_from_espn_and_grade_every_market(monkeypatch):
+    from finalpoint import results as rs
+    tip = 2000000000
+    js = _espn_tennis("Himeno Sakatsume", "Hong Yi Cody Wong", [6, 6], [4, 2], True, date="2033-05-18T03:20:00Z")
+    rs._tcache.clear()
+    d = rs.find_tennis("Himeno Sakatsume", "Hong Yi Cody Wong", tip, getter=lambda url: js if "wta" in url else {})
+    assert d == dict(sets=(2, 0), games=(12, 6), home_won=True, retired=False)
+    rs._tcache.clear()
+    d2 = rs.find_tennis("Hong Yi Cody Wong", "Himeno Sakatsume", tip, getter=lambda url: js if "wta" in url else {})      # listed the other way round
+    assert d2 == dict(sets=(0, 2), games=(6, 12), home_won=False, retired=False)
+    pk = lambda m, l, s: dict(pkey="%s|%s|%s" % (m, "" if l is None else "%g" % l, s), mkt=m, line=l, sel=s, odds=2.0)
+    assert rs.settle_tennis(pk("total", 22.5, "over"), d)[0] == "lost" and rs.settle_tennis(pk("total", 17.5, "over"), d)[0] == "won"
+    assert rs.settle_tennis(pk("ah", -4.5, "away"), d)[0] == "lost" and rs.settle_tennis(pk("ah", -6.5, "away"), d)[0] == "won"      # the line is the home side's: away +4.5 / +6.5
+    assert rs.settle_tennis(pk("sh", -1.5, "home"), d)[0] == "won" and rs.settle_tennis(pk("es", None, "s2"), d)[0] == "won"
+    assert rs.settle_tennis(pk("cs", None, "2:0"), d)[0] == "won" and rs.settle_tennis(pk("ml", None, "away"), d)[0] == "lost"
+
+
+def test_a_retirement_or_odd_finish_is_never_graded():
+    from finalpoint import results as rs
+    rs._tcache.clear()
+    js = _espn_tennis("A Player", "B Player", [6, 2], [3, 1], True, status="STATUS_RETIRED", date="2033-05-18T03:20:00Z")
+    d = rs.find_tennis("A Player", "B Player", 2000000000, getter=lambda url: js if "wta" in url else {})
+    assert d["retired"] is True
+    rec = dict(home="A Player", away="B Player", picks=[dict(pkey="ml||home", mkt="ml", line=None, sel="home", d="A Player to win", odds=1.5, tier=3)])
+    end, graded = rs.end_block("TN", rec, 2, 0, {}, d)
+    assert graded[0]["status"] == "ungraded" and "retirement" in graded[0]["why"]
+    rs._tcache.clear()
+
+
+def test_a_finished_tennis_card_is_graded_on_games_and_sets_through_settle_due(monkeypatch):
+    from finalpoint import results as rs
+    fp, store, posts = _fp()
+    soft = {"ml": {"home": 1.3, "away": 3.4}, "ah": {"-4.5": {"home": 1.9, "away": 1.9}}, "total": {"22.5": {"over": 1.9, "under": 1.9}}}
+    pin = {"ml": {"home": 1.3, "away": 3.4}, "ah": {"-4.5": {"home": 1.9, "away": 1.9}}, "total": {"22.5": {"over": 1.9, "under": 1.9}}}
+    pl = _payload(0, soft=soft, pin=pin, tag="TN"); pl.update(home="Himeno Sakatsume", away="Hong Yi Cody Wong")
+    fp.feed(pl)
+    js = _espn_tennis("Himeno Sakatsume", "Hong Yi Cody Wong", [6, 6], [4, 2], True, date="2033-05-18T03:20:00Z")
+    rs._tcache.clear()
+    monkeypatch.setattr(rs, "find_tennis", lambda h, a, tip, getter=None: rs.find_tennis.__wrapped__(h, a, tip, lambda url: js if "wta" in url else {}) if False else
+                        dict(sets=(2, 0), games=(12, 6), home_won=True, retired=False))
+    assert fp.settle_due(now=2000000000 + 3 * 3600) == 1
+    t = posts[-1]
+    assert "MATCH ENDED" in t and "Not graded" not in t and ("Won" in t or "Lost" in t)
+
+
+def test_long_boards_hold_every_game_and_link_previous_and_next():
+    from finalpoint import board
+    ents = [dict(rk=str(i), tag="FB" if i < 70 else "TN", home="Team Number %d" % i, away="Other Team %d" % i, tip=2000000000 + i, seen=i, st="WATCH", card=i + 1) for i in range(120)]
+    pages = board.render_games("2033-05-18", ents, "https://t.me/c/1/", ids=[501, 502, 503, 504])
+    assert len(pages) >= 3 and all(len(p) < 4000 for p in pages)
+    allt = "\n".join(pages)
+    assert allt.count(" · WATCH") == 120
+    assert "Previous" not in pages[0].split("\n")[2] and "https://t.me/c/1/502" in pages[0] and "Next" in pages[0]
+    assert "https://t.me/c/1/501" in pages[1] and "https://t.me/c/1/503" in pages[1]
+    assert "(cont.)" in pages[1] and "page 2/" in pages[1]
+    lp = [dict(rk=str(i), tag="FB", home="Home %d" % i, away="Away %d" % i, tip=2000000000 + i, seen=i, card=i + 1, ck=2000000000,
+               lead=[dict(pkey="k%d" % i, d="Over 2.5", odds=1.9, e=0.05)], val=[]) for i in range(80)]
+    pp = board.render_picks("2033-05-18", lp, "https://t.me/c/1/", ids=[7, 8, 9])
+    assert len(pp) >= 2 and all(len(p) < 4000 for p in pp) and sum(x.count("Over 2.5") for x in pp) == 80
+    assert "Next" in pp[0] and "Previous" in pp[-1]

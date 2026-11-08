@@ -74,14 +74,43 @@ def _a(base, mid, text):
     return '<a href="%s%s">%s</a>' % (base, mid, E(text)) if base and mid else E(text)
 
 
-def _pages(head, lines):
-    pages, cur = [], head
-    for ln in lines:
-        if len(cur) + len(ln) + 1 > LIMIT and cur != head:
-            pages.append(cur)
-            cur = head + " · page %d" % (len(pages) + 1)
-        cur += "\n" + ln
-    pages.append(cur)
+def _pages(head, sub, body, base="", ids=None, first=None):
+    """Split a board into pages that each carry the title, the sub-line and a Previous / Next row.
+    body = [(section_title_or_None, line, is_section_header)]. A section that runs onto the next page is re-headed "(cont.)".
+    ids = message ids this board already has (so the links can point at them); unknown neighbours show as plain text."""
+    ids = list(ids or [])
+    budget = LIMIT - len(head) - len(sub) - 700
+    chunks, cur, size = [], [], 0
+    for sec, ln, hd in body:
+        extra = 0
+        if not cur and sec and not hd:
+            cur.append((sec, sec + " <i>(cont.)</i>", True))
+            size += len(cur[0][1]) + 1
+        if cur and size + len(ln) + 1 > budget:
+            chunks.append(cur)
+            cur, size = [], 0
+            if sec and not hd:
+                cur.append((sec, sec + " <i>(cont.)</i>", True))
+                size += len(cur[0][1]) + 1
+        cur.append((sec, ln, hd))
+        size += len(ln) + 1
+    chunks.append(cur)
+    n = len(chunks)
+    pages = []
+    for i, ch in enumerate(chunks):
+        t = head + ((" · page %d/%d" % (i + 1, n)) if n > 1 else "")
+        out = [t, sub]
+        if n > 1:
+            prv = _a(base, ids[i - 1], "◀ Previous") if i > 0 and i - 1 < len(ids) else ("◀ Previous" if i > 0 else "")
+            nxt = _a(base, ids[i + 1], "Next ▶") if i + 1 < n and i + 1 < len(ids) else ("Next ▶" if i + 1 < n else "")
+            out.append(" · ".join(x for x in (prv, "page %d of %d" % (i + 1, n), nxt) if x))
+        if i == 0 and first:
+            out.append(first)
+        out += [ln for _, ln, _ in ch]
+        if n > 1:
+            out.append("")
+            out.append(" · ".join(x for x in (prv, nxt) if x))
+        pages.append("\n".join(out))
     return pages
 
 
@@ -92,55 +121,59 @@ def _by_sport(ents):
     return [(t, out[t]) for t in ORDER + sorted(k for k in out if k not in ORDER) if t in out]
 
 
-def render_games(day, ents, base="", other=None, now=None):
-    """TODAY'S GAMES: a section per sport, games in the order they appeared (newest last)."""
+def render_games(day, ents, base="", other=None, now=None, ids=None):
+    """TODAY'S GAMES: every game, a section per sport, in the order they appeared (newest last). Pages link Previous / Next."""
     now = now or datetime.now(timezone.utc).timestamp()
     head = "<b>FINALPOINT · TODAY'S GAMES</b> · %s" % datetime.strptime(day, "%Y-%m-%d").strftime("%a %d %b")
-    secs = _by_sport([e for e in ents])
-    lines = ["<i>updated %s · %d games%s</i>" % (wat(now).strftime("%H:%M"), len(ents),
-                                                   (" · " + _a(base, other, "Validated & Leads")) if other and base else "")]
-    if secs:
-        lines.append("Jump: " + " · ".join(_a(base, sorted(g, key=lambda e: e.get("seen") or 0)[0].get("card"), "%s %d" % (t, len(g))) for t, g in secs))
+    secs = _by_sport(list(ents))
+    sub = "<i>updated %s · %d games%s</i>" % (wat(now).strftime("%H:%M"), len(ents),
+                                              (" · " + _a(base, other, "Validated & Leads")) if other and base else "")
+    first = ("Jump: " + " · ".join(_a(base, sorted(g, key=lambda e: e.get("seen") or 0)[0].get("card"), "%s %d" % (t, len(g))) for t, g in secs)) if secs else None
+    body = []
     for t, g in secs:
         g = sorted(g, key=lambda e: e.get("seen") or 0)
-        lines += ["", "<b>%s</b> · %d" % (NAME.get(t, t), len(g))]
+        sec = "<b>%s</b> · %d" % (NAME.get(t, t), len(g))
+        body += [(None, "", False), (sec, sec, True)]
         for e in g:
             st = ("FT " + str(e["end"])) if e.get("end") else e.get("st", "WATCH")
-            lines.append("%s %s · %s" % (wat(e["tip"]).strftime("%H:%M") if e.get("tip") else "--:--", _a(base, e.get("card"), _title(e)), E(str(st))))
+            body.append((sec, "%s %s · %s" % (wat(e["tip"]).strftime("%H:%M") if e.get("tip") else "--:--", _a(base, e.get("card"), _title(e)), E(str(st))), False))
     if not secs:
-        lines.append("No game analysed yet today.")
-    return _pages(head, lines)
+        body.append((None, "No game analysed yet today.", False))
+    return _pages(head, sub, body, base, ids, first)
 
 
 MARK = {"won": " ✅", "halfwon": " ✅", "lost": " ❌", "halflost": " ❌", "void": " ➖"}
 
 
-def render_picks(day, ents, base="", other=None, record=None, now=None):
-    """VALIDATED & LEADS: only matches with a VALIDATED pick or a lead. One line per pick, no story."""
+def render_picks(day, ents, base="", other=None, record=None, now=None, ids=None):
+    """VALIDATED & LEADS: matches with a VALIDATED pick or a lead, one line per pick, no story. Pages link Previous / Next."""
     now = now or datetime.now(timezone.utc).timestamp()
     head = "<b>FINALPOINT · VALIDATED &amp; LEADS</b> · %s" % datetime.strptime(day, "%Y-%m-%d").strftime("%a %d %b")
     r = record or {}
-    lines = ["<i>updated %s · VALIDATED record so far: %dW-%dL%s</i>" % (wat(now).strftime("%H:%M"), r.get("w", 0), r.get("l", 0),
-                                                                         (" · " + _a(base, other, "Today's Games")) if other and base else "")]
+    sub = "<i>updated %s · VALIDATED record so far: %dW-%dL%s</i>" % (wat(now).strftime("%H:%M"), r.get("w", 0), r.get("l", 0),
+                                                                    (" · " + _a(base, other, "Today's Games")) if other and base else "")
+    body = []
 
     def section(title, key, note):
         rows = [e for e in ents if e.get(key)]
-        lines.append("")
-        lines.append("<b>%s</b>%s" % (title, (" <i>%s</i>" % note) if note else ""))
+        top = "<b>%s</b>%s" % (title, (" <i>%s</i>" % note) if note else "")
+        body.append((None, "", False))
+        body.append((top, top, True))
         if not rows:
-            lines.append("None right now." if key == "lead" else "None yet today.")
+            body.append((top, "None right now." if key == "lead" else "None yet today.", False))
             return
         for t, g in _by_sport(rows):
-            lines.append("<b>%s</b>" % NAME.get(t, t))
+            sec = "<b>%s</b> · %s" % (NAME.get(t, t), title.lower())
+            body.append((sec, sec, True))
             for e in sorted(g, key=lambda e: e.get("tip") or 0):
                 for p in e[key]:
                     res = MARK.get((e.get("res") or {}).get(p.get("pkey")), "")
-                    lines.append("%s %s · %s · %.2f · %+.1f%%%s · as of %s%s" % (
+                    body.append((sec, "%s %s · %s · %.2f · %+.1f%%%s · as of %s%s" % (
                         wat(e["tip"]).strftime("%H:%M") if e.get("tip") else "--:--", _a(base, e.get("card"), _title(e)), E(str(p.get("d"))),
                         float(p.get("odds") or 0), 100 * float(p.get("e") or 0), res, wat(e["ck"]).strftime("%H:%M") if e.get("ck") else "--:--",
-                        " · early" if e.get("early") else ""))
+                        " · early" if e.get("early") else ""), False))
 
     section("VALIDATED", "val", "")
     section("LEADS", "lead", "(not bets yet)")
-    lines += ["", "<i>early = last checked more than 1 hour before kickoff: wait for the T-60 / T-30 check. Open the card and read its latest block before you play. A pick that shows WITHDRAWN is off.</i>"]
-    return _pages(head, lines)
+    body += [(None, "", False), (None, "<i>early = last checked more than 1 hour before kickoff: wait for the T-60 / T-30 check. Open the card and read its latest block before you play. A pick that shows WITHDRAWN is off.</i>", False)]
+    return _pages(head, sub, body, base, ids, None)

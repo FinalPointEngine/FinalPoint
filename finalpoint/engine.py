@@ -419,10 +419,10 @@ class FinalPoint:
         return lvl, lab, streak
 
     # ---------------------------------------------------------------- results
-    def _finish(self, rec, hg, ag):
+    def _finish(self, rec, hg, ag, extra=None):
         """Grade the picks, add MATCH ENDED, update the running record (fp_stats2, fp_ledger) and edit the card."""
         stats = self._rd("fp_stats2", {})
-        end, graded = results.end_block(rec["tag"], rec, hg, ag, stats)
+        end, graded = results.end_block(rec["tag"], rec, hg, ag, stats, extra)
         rec["end"] = end
         led = self._rd("fp_ledger", [])
         for g in graded:
@@ -466,10 +466,13 @@ class FinalPoint:
         ents = list(st["g"].values())
         rec2 = (self._rd("fp_stats2", {}) or {}).get("VALIDATED") or {}
         b1, b2 = st["b1"], st["b2"]
-        i2, h2, ok2 = self._boards(board.render_picks(day, ents, self._base, (b1[0] or [None])[0], rec2, now), b2[0], b2[1])
-        st["b2"] = [i2, h2]
-        i1, h1, ok1 = self._boards(board.render_games(day, ents, self._base, (i2 or [None])[0], now), b1[0], b1[1])
-        st["b1"] = [i1, h1]
+        ok1 = ok2 = True
+        for _ in range(2):                                    # pass 2 re-renders with the message ids pass 1 just created, so Previous / Next links resolve
+            i2, h2, ok2 = self._boards(board.render_picks(day, ents, self._base, (b1[0] or [None])[0], rec2, now, b2[0]), b2[0], b2[1])
+            b2 = [i2, h2]
+            i1, h1, ok1 = self._boards(board.render_games(day, ents, self._base, (i2 or [None])[0], now, b1[0]), b1[0], b1[1])
+            b1 = [i1, h1]
+        st["b1"], st["b2"] = b1, b2
         if ok1 and ok2:
             st["dirty"], st["urg"] = False, False
             st["t"] = now
@@ -499,7 +502,12 @@ class FinalPoint:
             rec = self._rd(rk, None)
             if not rec or rec.get("end") or now - rec.get("end_try", 0) < results.RETRY:
                 continue
-            sc = results.find_score(rec["tag"], rec.get("home"), rec.get("away"), tip, getter)
+            extra = None
+            if rec["tag"] == "TN" and getter is None:
+                extra = results.find_tennis(rec.get("home"), rec.get("away"), tip)
+                sc = tuple(extra["sets"]) if extra else results.find_score(rec["tag"], rec.get("home"), rec.get("away"), tip, getter)
+            else:
+                sc = results.find_score(rec["tag"], rec.get("home"), rec.get("away"), tip, getter)
             with self._lock:
                 rec = self._rd(rk, None)
                 if not rec or rec.get("end"):
@@ -508,7 +516,7 @@ class FinalPoint:
                     rec["end_try"] = now
                     self._wr(rk, rec)
                     continue
-                self._finish(rec, sc[0], sc[1])
+                self._finish(rec, sc[0], sc[1], extra)
                 done += 1
         return done
 

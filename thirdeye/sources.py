@@ -9,8 +9,15 @@ from datetime import datetime, timezone
 
 SLUG = {"football": "football", "basketball": "basketball", "tennis": "tennis", "hockey": "ice-hockey", "afootball": "american-football",
         "handball": "handball", "volleyball": "volleyball"}
-ESPN = {"basketball": ["basketball/nba"], "hockey": ["hockey/nhl"], "afootball": ["football/nfl"], "football": ["soccer/all"],
-        "tennis": ["tennis/atp", "tennis/wta"]}
+ESPN = {"basketball": ["basketball/nba", "basketball/mens-college-basketball", "basketball/womens-college-basketball"],
+        "hockey": ["hockey/nhl", "hockey/mens-college-hockey"], "afootball": ["football/nfl", "football/college-football"],
+        "football": ["soccer/all"], "tennis": ["tennis/atp", "tennis/wta"]}
+GROUPS = {"basketball/mens-college-basketball": "50", "basketball/womens-college-basketball": "50", "football/college-football": "80"}   # all of Division I, not just the featured games
+
+
+def espn_url(path, date):
+    return "https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s&limit=1000%s" % (
+        path, date.replace("-", ""), ("&groups=" + GROUPS[path]) if path in GROUPS else "")
 _blocked = {"until": 0.0}
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Accept": "application/json", "Referer": "https://www.sofascore.com/"}
@@ -88,7 +95,7 @@ def fetch_day(sport, date, getter=get_json):
     rows, ok = [], False
     for path in ESPN.get(sport, []):
         try:
-            js = getter("https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s&limit=1000" % (path, date.replace("-", "")))
+            js = getter(espn_url(path, date))
             rows += parse_espn_tennis(js) if sport == "tennis" else parse_espn(js)
             ok = True
         except Exception as e:

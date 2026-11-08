@@ -56,7 +56,7 @@ def find_score(tag, home, away, tip, getter=None, second=None):
     for src in (getter, second):
         if src is None:
             continue
-        for d in (d0, d0 + timedelta(days=1)):
+        for d in (d0 - timedelta(days=1), d0, d0 + timedelta(days=1)):          # the feeds list a late US game under the day before in UTC
             try:
                 rows = _day_rows(sport, d.strftime("%Y-%m-%d"), src)
             except Exception as e:
@@ -66,6 +66,79 @@ def find_score(tag, home, away, tip, getter=None, second=None):
                 if abs(t - tip) <= 8 * 3600 and _same(h, home) and _same(a, away):
                     return int(hg), int(ag)
     return None
+
+
+# ---------------------------------------------------------------- tennis: sets and games from ESPN
+_tcache = {}
+
+
+def _tennis_day(date, getter):
+    """Finished singles matches of one ESPN day -> [dict(t, a, b, sets=(a, b), games=(a, b), a_won, ok)], players in ESPN's order."""
+    hit = _tcache.get(date)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    out = []
+    for path in ("tennis/atp", "tennis/wta"):
+        try:
+            js = getter("https://site.api.espn.com/apis/site/v2/sports/%s/scoreboard?dates=%s&limit=1000" % (path, date.replace("-", "")))
+        except Exception as e:
+            log.info("no tennis detail from %s: %s", path, str(e)[:80])
+            continue
+        for ev in (js or {}).get("events", []):
+            for gr in ev.get("groupings") or [{"competitions": ev.get("competitions", [])}]:
+                for c in gr.get("competitions") or []:
+                    try:
+                        st = (c.get("status") or {}).get("type") or {}
+                        if not st.get("completed"):
+                            continue
+                        pl = sorted([x for x in c["competitors"] if x.get("athlete")], key=lambda x: x.get("order", 0))
+                        if len(pl) != 2:
+                            continue
+                        ls = [[float(z.get("value", 0)) for z in (x.get("linescores") or [])] for x in pl]
+                        t = int(datetime.fromisoformat((c.get("date") or ev["date"]).replace("Z", "+00:00")).timestamp())
+                        n = min(len(ls[0]), len(ls[1]))
+                        sa = sum(1 for i in range(n) if ls[0][i] > ls[1][i])
+                        sb = sum(1 for i in range(n) if ls[1][i] > ls[0][i])
+                        a_won = bool(pl[0].get("winner"))
+                        clean = (n > 0 and sa != sb and (sa > sb) == a_won and st.get("name", "STATUS_FINAL") == "STATUS_FINAL")
+                        out.append(dict(t=t, a=pl[0]["athlete"]["displayName"], b=pl[1]["athlete"]["displayName"], sets=(sa, sb),
+                                        games=(int(sum(ls[0][:n])), int(sum(ls[1][:n]))), a_won=a_won, ok=clean))
+                    except (KeyError, TypeError, ValueError):
+                        continue
+    _tcache[date] = (time.time(), out)
+    return out
+
+
+def find_tennis(home, away, tip, getter=None):
+    """dict(sets=(home, away), games=(home, away), home_won, retired) of the finished match, in the card's home/away order, or None.
+    retired = the feed does not show a normal finish (retirement, walkover, odd score): such a match is never graded."""
+    if not tip:
+        return None
+    if getter is None:
+        from thirdeye.sources import get_json as getter
+    d0 = datetime.fromtimestamp(tip, tz=timezone.utc)
+    for d in (d0 - timedelta(days=1), d0, d0 + timedelta(days=1)):
+        for m in _tennis_day(d.strftime("%Y-%m-%d"), getter):
+            if abs(m["t"] - tip) > 14 * 3600:
+                continue
+            if _same(m["a"], home) and _same(m["b"], away):
+                s, g, w = m["sets"], m["games"], m["a_won"]
+            elif _same(m["a"], away) and _same(m["b"], home):               # SportyBet lists the players the other way round
+                s, g, w = m["sets"][::-1], m["games"][::-1], not m["a_won"]
+            else:
+                continue
+            return dict(sets=s, games=g, home_won=w, retired=not m["ok"])
+    return None
+
+
+def settle_tennis(pick, d):
+    """Grade one pick from sets and games. -> (status, ret) or None."""
+    from tennis import model
+    try:
+        c = dict(mkt=pick["mkt"], line=pick.get("line"), sel=pick["sel"], odds=pick["odds"])
+        return model.settle(c, d["games"][0], d["games"][1], home_won=d["home_won"], sets=tuple(d["sets"]))
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- grading
@@ -162,12 +235,16 @@ def lesson(picks, stats):
     return head + tail + note
 
 
-def end_block(tag, rec, hg, ag, stats):
+def end_block(tag, rec, hg, ag, stats, extra=None):
     """Grade the picks of the last check. -> (end dict, picks graded). Mutates stats (the running record)."""
     home, away = rec.get("home") or "", rec.get("away") or ""
     graded = []
     for pk in rec.get("picks") or []:
-        r = settle(tag, pk, hg, ag)
+        if tag == "TN" and extra and extra.get("retired"):
+            graded.append(dict(d=pk["d"], res="Not graded", why="The feed does not show a normal finish (retirement, walkover or an odd score). SportyBet usually voids these, so nothing is graded.",
+                               tier=pk.get("tier", 3), status="ungraded"))
+            continue
+        r = settle_tennis(pk, extra) if (tag == "TN" and extra) else settle(tag, pk, hg, ag)
         if r is None:
             graded.append(dict(d=pk["d"], res="Not graded", why="This market is not decided by the final score the free feed gives (sets or games are missing).",
                                tier=pk.get("tier", 3), status="ungraded"))
