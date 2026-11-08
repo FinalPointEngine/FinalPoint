@@ -23,27 +23,39 @@ def label_of(x):
     return x if x.lower().startswith(("check", "final", "last")) else "Check " + x
 
 
+def disp(name):
+    """'Liu, Claire' -> 'Claire Liu' (tennis feeds list surname first); other names unchanged."""
+    name = str(name or "").strip()
+    if "," in name and "/" not in name:
+        a, b = [x.strip() for x in name.split(",", 1)]
+        if a and b:
+            return "%s %s" % (b, a)
+    return name
+
+
 def short(name, n=12):
     name = str(name or "")
     return name if len(name) <= n else name[:n].rstrip()
 
 
-def _pair(home, away):
+def _pair(home, away, last=False):
     """One short word per team for the price table: the first word, or the last when both start the same ('Real Madrid' / 'Real Sociedad')."""
     h, a = str(home or "").split(), str(away or "").split()
-    if h and a and h[0].lower() == a[0].lower():
+    if h and a and (last or h[0].lower() == a[0].lower()):
         return h[-1], a[-1]
     return (h[0] if h else "Home"), (a[0] if a else "Away")
 
 
-def row_label(mkt, line, sel, home, away):
+def row_label(mkt, line, sel, home, away, last=False):
     if mkt in ("1x2", "ml"):
+        if last:
+            home, away = _pair(home, away, True)
         return {"home": short(home), "away": short(away), "draw": "Draw"}.get(sel, str(sel))
     if mkt in ("ah", "sh"):
         if line is None:
             return str(sel)
         ln = "%+g" % (line if sel == "home" else -line)
-        nm = _pair(home, away)[0 if sel == "home" else 1]
+        nm = _pair(home, away, last)[0 if sel == "home" else 1]
         return "%s %s" % (nm[:max(4, 12 - len(ln) - 1)], ln)
     if mkt == "total":
         return "%s %g" % (str(sel).title(), line)

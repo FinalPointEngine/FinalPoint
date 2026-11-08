@@ -326,3 +326,16 @@ def test_a_new_game_is_not_held_back_for_the_routine_refresh(monkeypatch):
     store["fp_bd:2033-05-18"] = json.dumps(st)
     assert fp.board_tick(now=2000000000 - 7200) == 1
     assert "Seattle v Calgary" in next(b for b in reversed(boards) if "TODAY'S GAMES" in b[0])[0]
+
+
+def test_tennis_names_listed_surname_first_read_naturally_and_fit_the_table():
+    fp, store, posts = _fp()
+    soft = {"ml": {"home": 3.0, "away": 1.41}, "ah": {"4.5": {"home": 1.71, "away": 2.15}}, "total": {"22.5": {"over": 2.25, "under": 1.65}}}
+    pin = {"ml": {"home": 3.18, "away": 1.46}, "ah": {"4.5": {"home": 1.67, "away": 2.49}}, "total": {"22.5": {"over": 2.18, "under": 1.85}}}
+    pl = _payload(0, soft=soft, pin=pin, tag="TN")
+    pl.update(home="Liu, Claire", away="Eala, Alexandra")
+    fp.feed(pl)
+    t = posts[-1]
+    assert "<b>Claire Liu vs</b>" in t and "<b>Alexandra Eala</b>" in t and "Liu, Claire" not in t
+    pre = t[t.index("<pre>") + 5:t.index("</pre>")]
+    assert "Liu +4.5" in pre and "Eala " in pre and all(len(x) <= 38 for x in pre.split("\n"))

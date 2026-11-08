@@ -75,7 +75,7 @@ class FinalPoint:
         tag, key = p["tag"], str(p["key"])
         rk = "fp:%s:%s" % (tag, key)
         rec = self._rd(rk, None) or dict(tag=tag, key=key, checks=[], fp=[], fp_h=[], val={}, wd={})
-        rec.update(home=p.get("home"), away=p.get("away"), league=p.get("league"), tip=p.get("tip"), min_ev=p.get("min_ev", 0.04))
+        rec.update(home=card.disp(p.get("home")), away=card.disp(p.get("away")), league=p.get("league"), tip=p.get("tip"), min_ev=p.get("min_ev", 0.04))
         rec.setdefault("val", {})
         rec.setdefault("wd", {})
         prev = rec["checks"][-1] if rec["checks"] else None
@@ -318,7 +318,7 @@ class FinalPoint:
                 if o["pkey"] in star and not tagtxt:
                     tagtxt = "WATCH (closest)"
                 mark = "derived" if o["derived"] else ("" if o["exact"] else "model")
-                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away), o=o["odds"], f=o["fair"], e=o["e"],
+                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away, tag == "TN"), o=o["odds"], f=o["fair"], e=o["e"],
                                  s=o["pkey"] in star, t=tagtxt, m=mark))
             if rows:
                 groups.append(dict(title=card.group_title(tag, g[0], not chosen[g]), rows=rows))
