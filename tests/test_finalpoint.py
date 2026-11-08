@@ -536,3 +536,16 @@ def test_zero_handicap_is_written_0_on_both_sides_never_minus_0():
     assert card.row_label("ah", 0.0, "home", "SK Rotor Volgograd", "Leningradets") == "Rotor 0"
     assert card.row_label("ah", 0.0, "away", "SK Rotor Volgograd", "Leningradets") == "Leningrade 0"
     assert card.row_label("ah", -0.0, "away", "A B", "C D").endswith(" 0") and card.row_label("ah", 0.5, "away", "A B", "C D").endswith("-0.5")
+
+
+def test_american_football_names_use_the_nickname_and_the_spread_note_is_gone():
+    from finalpoint import card
+    assert card.row_label("ml", None, "home", "San Francisco 49ers", "Las Vegas Raiders", True) == "49ers"
+    assert card.row_label("ah", -9.5, "home", "San Francisco 49ers", "Las Vegas Raiders", True) == "49ers -9.5"
+    assert card.row_label("ah", -9.5, "away", "San Francisco 49ers", "Las Vegas Raiders", True) == "Raiders +9.5"
+    fp, store, posts = _fp()
+    soft = {"ml": {"home": 1.22, "away": 4.0}, "total": {"52.5": {"over": 1.95, "under": 1.83}}}
+    pin = {"ml": {"home": 1.24, "away": 5.2}, "total": {"52.5": {"over": 2.11, "under": 1.90}}, "ah": {"-9.5": {"home": 1.95, "away": 1.95}}}
+    pl = _payload(0, soft=soft, pin=pin, tag="AF"); pl.update(home="San Francisco 49ers", away="Las Vegas Raiders")
+    fp.feed(pl)
+    assert "underdog spread" not in posts[-1] and "49ers 1.22" in posts[-1] and "San Francisc" not in posts[-1].split("<pre>")[1]

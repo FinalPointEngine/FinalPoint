@@ -52,7 +52,7 @@ def core(name):
 def _pair(home, away, last=False):
     """One short word per team for the price table: the first word, or the last when both start the same ('Real Madrid' / 'Real Sociedad')."""
     h, a = core(home).split(), core(away).split()
-    if h and a and (last or h[0].lower() == a[0].lower()):
+    if h and a and (last or h[0].lower() == a[0].lower()) and h[-1].lower() != a[-1].lower():
         return h[-1], a[-1]
     return (h[0] if h else "Home"), (a[0] if a else "Away")
 
@@ -233,7 +233,7 @@ def story(rec, c, prev, fy, top):
     if only and c["pin"]:
         hid.append("SportyBet also lists %s, which Pinnacle does not price, so there is no fair price there" % ", ".join(only[:4]))
     for f in c.get("shadow") or []:
-        if f.startswith("C1") and rec.get("tag") not in ("AF", "BB"):      # a 69% favourite at -1.5 is normally far below 69%: noise outside spread sports
+        if f.startswith("C1"):      # a favourite's chance to win is always far above its chance to cover a spread: the note fired on almost every game, so it is logged only
             continue
         t = _plain_flag(f)
         if t:
