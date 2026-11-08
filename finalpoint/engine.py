@@ -20,6 +20,13 @@ ICON = {"FB": "⚽", "TN": "🎾", "IH": "🏒", "AF": "🏈", "HB": "🤾", "VB
 SEP = "━" * 15
 LATE = ("final", "t15", "last")
 MAX_LIST = 5
+def TOTAL_GAP():
+    try:
+        return float(os.environ.get("FP_TOTAL_GAP", "0.06"))
+    except ValueError:
+        return 0.06
+
+
 def MIN_ODDS():
     try:
         return float(os.environ.get("FP_MIN_ODDS", "1.12"))
@@ -195,13 +202,30 @@ class FinalPoint:
                 hist.setdefault(k, []).append(v)
         c["e"] = {r["pkey"]: round(r["edge"], 4) for r in rows if r["edge"] >= half and not r["derived"]}
         home, away = rec.get("home") or "", rec.get("away") or ""
+        tgap = {"over": 0.0, "under": 0.0}      # how far SportyBet's whole total sits from Pinnacle's (chance points): a constant offset is not an edge
+        for ln, d in (soft.get("total") or {}).items():
+            try:
+                o, u = float(d["over"]), float(d["under"])
+                pv = pf.get(("total", float(ln))) or {}
+                if "over" in pv and "under" in pv:
+                    so = (1 / o) / (1 / o + 1 / u)
+                    tgap["over"] = max(tgap["over"], pv["over"] - so)
+                    tgap["under"] = max(tgap["under"], pv["under"] - (1 - so))
+            except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                continue
+        c["tgap"] = {k: round(v, 3) for k, v in tgap.items()}
+        shift_why = "SportyBet's whole total sits %.0f pts away from Pinnacle's on every line: check both quote the same market (overtime?) before trusting it"
         out = []
         for r in sorted(rows, key=lambda r: -r["edge"]):
             k, e = r["pkey"], r["edge"]
             own = r["exact"] and not r["derived"]               # priced by Pinnacle on this exact line
             need = thr if own else thr * mult                   # a line priced by a model needs more edge
             call, note = "", ""
-            if k in rec["val"] and not r["derived"]:
+            shifted = r["mkt"] == "total" and own and tgap.get(r["sel"], 0) >= TOTAL_GAP()
+            if k in rec["val"] and not r["derived"] and shifted:
+                rec["val"].pop(k, None)
+                call, note = "POSSIBLE", "AUDIT: " + shift_why % (100 * tgap[r["sel"]])
+            elif k in rec["val"] and not r["derived"]:
                 if e >= half:
                     call = "VALIDATED (holds)"
                 else:
@@ -216,6 +240,8 @@ class FinalPoint:
                     why.append("model-priced line, Pinnacle does not list it")
                 elif e > rules.MAX_EDGE():
                     why.append("edge above %.0f%%, check it is the same market on both books" % (100 * rules.MAX_EDGE()))
+                if shifted:
+                    why.append(shift_why % (100 * tgap[r["sel"]]))
                 if not fresh and not r["derived"]:
                     why.append("Pinnacle price %.0f min old" % age)
                 stable = bool(hist.get(k)) and hist[k][-1] >= thr
@@ -275,22 +301,22 @@ class FinalPoint:
         """The best 3 markets, always (when there is any price): validated first, then possible, then the closest to value.
         One side per line, and a market type is repeated only for a real (validated / possible) call."""
         cands = sorted([o for o in out if o["call"] != "WITHDRAWN"], key=lambda o: (self._tier(o), not (o["exact"] and not o["derived"]), -o["e"]))
-        picked, seen, kinds, rest = [], set(), set(), []
+        picked, seen, kinds, rest = [], set(), {}, []
         for o in cands:
             g = (o["mkt"], o["line"])
             if g in seen:
                 continue
-            if o["mkt"] in kinds and self._tier(o) == 3:
+            if o["mkt"] in kinds:                          # one pick per market type: Under 4 and Under 4.5 are the same bet
                 rest.append(o)
                 continue
             seen.add(g)
-            kinds.add(o["mkt"])
+            kinds[o["mkt"]] = self._tier(o)
             picked.append(o)
             if len(picked) == 3:
                 return picked
         for o in rest:
             g = (o["mkt"], o["line"])
-            if g not in seen and len(picked) < 3:
+            if g not in seen and len(picked) < 3 and self._tier(o) == 3 and kinds.get(o["mkt"]) == 3:
                 seen.add(g)
                 picked.append(o)
         return picked

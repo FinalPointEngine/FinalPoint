@@ -38,9 +38,20 @@ def short(name, n=12):
     return name if len(name) <= n else name[:n].rstrip()
 
 
+GENERIC = {"hc", "fc", "fk", "sc", "bc", "kk", "hk", "ac", "as", "cf", "cd", "ud", "sk", "afc", "bk", "if", "ik", "rc", "sv", "tsg", "ssc"}
+
+
+def core(name):
+    """'HC Yugra Khanty-Mansiysk' -> 'Yugra Khanty-Mansiysk': drop the club-type prefix so the distinctive word shows."""
+    w = str(name or "").split()
+    while len(w) > 1 and w[0].lower().strip(".") in GENERIC:
+        w = w[1:]
+    return " ".join(w)
+
+
 def _pair(home, away, last=False):
     """One short word per team for the price table: the first word, or the last when both start the same ('Real Madrid' / 'Real Sociedad')."""
-    h, a = str(home or "").split(), str(away or "").split()
+    h, a = core(home).split(), core(away).split()
     if h and a and (last or h[0].lower() == a[0].lower()):
         return h[-1], a[-1]
     return (h[0] if h else "Home"), (a[0] if a else "Away")
@@ -50,7 +61,7 @@ def row_label(mkt, line, sel, home, away, last=False):
     if mkt in ("1x2", "ml"):
         if last:
             home, away = _pair(home, away, True)
-        return {"home": short(home), "away": short(away), "draw": "Draw"}.get(sel, str(sel))
+        return {"home": short(core(home)), "away": short(core(away)), "draw": "Draw"}.get(sel, str(sel))
     if mkt in ("ah", "sh"):
         if line is None:
             return str(sel)
@@ -215,6 +226,8 @@ def story(rec, c, prev, fy, top):
     if only and c["pin"]:
         hid.append("SportyBet also lists %s, which Pinnacle does not price, so there is no fair price there" % ", ".join(only[:4]))
     for f in c.get("shadow") or []:
+        if f.startswith("C1") and rec.get("tag") not in ("AF", "BB"):      # a 69% favourite at -1.5 is normally far below 69%: noise outside spread sports
+            continue
         t = _plain_flag(f)
         if t:
             hid.append((t if t.split(" ")[0] in ("Pinnacle", "Pinnacle's", "SportyBet", "SportyBet's", "FinalPoint") else t[0].lower() + t[1:]).rstrip("."))

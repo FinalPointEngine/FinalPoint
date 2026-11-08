@@ -339,3 +339,32 @@ def test_tennis_names_listed_surname_first_read_naturally_and_fit_the_table():
     assert "<b>Claire Liu vs</b>" in t and "<b>Alexandra Eala</b>" in t and "Liu, Claire" not in t
     pre = t[t.index("<pre>") + 5:t.index("</pre>")]
     assert "Liu +4.5" in pre and "Eala " in pre and all(len(x) <= 38 for x in pre.split("\n"))
+
+
+def test_a_constant_offset_in_the_whole_total_is_never_validated_and_one_total_is_starred():
+    """The four KHL/VHL cards of 8 Nov: SportyBet's Under paid +5..+15% and its Over -16..-21% on every line, 90 minutes running."""
+    fp, store, posts = _fp()
+    soft = {"ml": {"home": 1.82, "away": 2.05}, "total": {"4.5": {"over": 1.57, "under": 2.40}, "5": {"over": 1.97, "under": 1.84}}}
+    pin = {"ml": {"home": 1.96, "away": 2.04}, "total": {"4.5": {"over": 1.93, "under": 2.08}, "5": {"over": 2.37, "under": 1.73}}}
+    for i in range(3):
+        fp.feed(_payload(i, soft=soft, pin=pin, label="Check %d" % (i + 1)))
+    t = html.unescape(posts[-1])
+    rec = json.loads(store["fp:IH:m1"])
+    assert rec["val"] == {} and "Status:</b> VALIDATED" not in t
+    assert "[V]" not in t and "away from Pinnacle's on every line" in t
+    assert sum(1 for p in rec["picks"] if p["mkt"] == "total") == 1
+
+
+def test_club_prefixes_are_dropped_in_labels_and_board_titles():
+    from finalpoint import card, board
+    assert card.row_label("ah", -1.5, "home", "HC Yugra Khanty-Mansiysk", "HC Magnitka Magnitogorsk") == "Yugra -1.5"
+    assert card.row_label("ml", None, "away", "HC Yugra Khanty-Mansiysk", "HC Magnitka Magnitogorsk") == "Magnitka Mag"
+    assert board._title(dict(home="HC Yugra Khanty-Mansiysk", away="HC Magnitka Magnitogorsk")) == "Yugra Khanty- v Magnitka Magn"
+
+
+def test_the_wide_gap_note_between_moneyline_and_spread_is_only_for_spread_sports():
+    fp, store, posts = _fp()
+    pin = {"ml": {"home": 1.45, "away": 3.21}, "ah": {"-1.5": {"home": 2.55, "away": 1.64}}}
+    soft = {"ml": {"home": 1.49, "away": 2.7}, "ah": {"-1.5": {"home": 2.5, "away": 1.54}}}
+    fp.feed(_payload(0, soft=soft, pin=pin))
+    assert "disagree by a wide margin" not in posts[-1]

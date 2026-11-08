@@ -59,8 +59,9 @@ def entry(rk, rec, seen):
     return e
 
 
-def _cut(name, n=18):
-    name = str(name or "")
+def _cut(name, n=13):
+    from finalpoint.card import core
+    name = core(name)
     return name if len(name) <= n else name[:n].rstrip()
 
 
