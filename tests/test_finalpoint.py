@@ -198,3 +198,15 @@ def test_feed_payload_is_json_with_string_line_keys():
                           dict(soft={"ah": {-1.5: {"home": 2.0, "away": 1.8}}}, pin=None), 0.04)
     assert body["soft"]["ah"] == {"-1.5": {"home": 2.0, "away": 1.8}}
     json.dumps(body)
+
+
+def test_checks_saved_by_the_older_layout_render_as_one_line_not_empty_blocks():
+    fp, store, posts = _fp()
+    fp.feed(_payload(0))
+    rec = json.loads(store["fp:IH:m1"])
+    for k in ("story", "st", "tbl"):
+        rec["checks"][0].pop(k, None)
+    store["fp:IH:m1"] = json.dumps(rec)
+    fp.feed(_payload(1, label="Check 2"))
+    t = posts[-1]
+    assert "Seen before the new layout" in t and t.count("<b>Status:</b>") == 1 and "<b>Check 2</b>" in t

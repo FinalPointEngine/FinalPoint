@@ -201,6 +201,9 @@ def header(rec):
 
 
 def block(c):
+    if not c.get("story") and not c.get("tbl") and not c.get("st"):          # a check saved by the older card layout: keep it as one line
+        return [SEP, "<b>%s</b> %s" % (E(label_of(c.get("label"))), wat(c["t"]).strftime("%H:%M") if c.get("t") else ""),
+                "Seen before the new layout: no price table was kept for this check."]
     L = [SEP, "<b>%s</b> %s" % (E(label_of(c.get("label"))), wat(c["t"]).strftime("%H:%M") if c.get("t") else ""),
          "<b>Status:</b> %s" % E(c.get("st") or ""), "<b>Match Story:</b>"]
     L += ["• " + E(s) for s in c.get("story") or []]
