@@ -104,6 +104,8 @@ def reason(tag, pick, status, hg, ag, home, away):
         if sel == "draw":
             return "The match ended level (%d-%d)." % (hg, ag) if status == "won" else "It did not end level: %s won %d-%d." % (win, max(hg, ag), min(hg, ag))
         team = home if sel == "home" else away
+        if tag == "TN":                                    # the free feed gives sets (or just a win), so no score is quoted
+            return "%s won the match." % (home if hg > ag else away) if (home if hg > ag else away) == team else "%s won the match, so %s did not." % (home if hg > ag else away, team)
         if win is None:
             return "The match ended level (%d-%d), so %s did not win." % (hg, ag, team)
         return "%s won %d-%d." % (win, max(hg, ag), min(hg, ag)) if win == team else "%s won %d-%d, so %s did not." % (win, max(hg, ag), min(hg, ag), team)
@@ -144,7 +146,7 @@ def lesson(picks, stats):
             parts.append("%s %s" % (TIER[t], "won" if w == n else "lost" if w == 0 else "split %d of %d" % (w, n)))
     head = ("This match: " + ", ".join(parts) + ".") if parts else "No pick could be graded on this score."
     rec = []
-    for name in ("VALIDATED", "POSSIBLE", "WATCH"):
+    for name in ("VALIDATED", "POSSIBLE"):                 # WATCH picks are only the closest to value, never a recommendation: tracked, not shown
         s = stats.get(name) or {}
         n = s.get("w", 0) + s.get("l", 0)
         if n:

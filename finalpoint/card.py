@@ -72,16 +72,23 @@ def row_label(mkt, line, sel, home, away, last=False):
         return "%s %g" % (str(sel).title(), line)
     if mkt == "es":
         return "2 sets" if sel == "s2" else "3 sets"
-    return "%s %s" % (sel, "" if line is None else "%g" % line)
+    return ("%s %s" % (sel, "" if line is None else "%g" % line)).strip()
 
 
 def group_title(tag, mkt, closest):
+    """The heading of one block of the price table, worded the way SportyBet words it for that sport."""
+    cl = " (closest line)" if closest else ""
+    if tag == "TN":
+        return {"ml": "MATCH WINNER", "ah": "GAME HANDICAP" + cl, "sh": "SET HANDICAP" + cl, "total": "TOTAL GAMES" + cl,
+                "es": "EXACT SETS", "cs": "CORRECT SCORE (SETS)"}.get(mkt, MKT_NAME.get(mkt, str(mkt)).upper())
+    if tag == "VB":
+        return {"ml": "MATCH WINNER", "ah": "SET HANDICAP" + cl, "total": "TOTAL SETS" + cl}.get(mkt, MKT_NAME.get(mkt, str(mkt)).upper())
     if mkt in ("ml", "1x2"):
         return ("MONEYLINE" if mkt == "ml" else "MATCH RESULT") + OT.get(tag, "")
     if mkt == "ah":
-        return ("SPREAD" if tag in ("AF", "BB") else "HANDICAP") + OT.get(tag, "") + (" (closest line)" if closest else "")
+        return ("SPREAD" if tag in ("AF", "BB") else "HANDICAP") + OT.get(tag, "") + cl
     if mkt == "total":
-        return "TOTAL %s%s" % (TOTAL_WORD.get(tag, "POINTS"), " (closest line)" if closest else "")
+        return "TOTAL %s%s" % (TOTAL_WORD.get(tag, "POINTS"), cl)
     return MKT_NAME.get(mkt, str(mkt)).upper()
 
 

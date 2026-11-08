@@ -162,7 +162,7 @@ def test_match_ended_grades_the_top_three_in_plain_english_and_updates_the_recor
     t = posts[-1]
     assert "<b>MATCH ENDED</b> · Seattle 3-2 Calgary" in t and "Calgary +1.5 [VALIDATED]: Won." in t
     assert "points to spare" in t and "<b>Lesson:</b>" in t and "Record so far: VALIDATED 1W-0L" in t
-    stats = json.loads(store["fp_stats"])
+    stats = json.loads(store["fp_stats2"])
     assert stats["VALIDATED"]["w"] == 1 and json.loads(store["fp_ledger"])
     assert fp.manual_result("Seattle", "Calgary", 1, 0).startswith("No open")           # a card is graded once
 
@@ -381,3 +381,21 @@ def test_picks_validated_more_than_an_hour_before_kickoff_are_marked_early_on_th
     fp.feed(pl)
     txt = next(b for b in reversed(boards) if "LEADS</b>" in b[0].split("\n")[0])[0]
     assert "Calgary +1.5" in txt and "· early" not in txt.split("<i>early")[0]
+
+
+def test_table_headings_follow_each_sports_own_wording():
+    from finalpoint import card
+    assert card.group_title("VB", "ah", True) == "SET HANDICAP (closest line)" and card.group_title("VB", "total", False) == "TOTAL SETS"
+    assert card.group_title("TN", "ah", False) == "GAME HANDICAP" and card.group_title("TN", "sh", False) == "SET HANDICAP"
+    assert card.group_title("TN", "total", True) == "TOTAL GAMES (closest line)" and card.group_title("TN", "ml", False) == "MATCH WINNER"
+    assert card.group_title("FB", "1x2", False) == "MATCH RESULT (90 min)" and card.group_title("AF", "ah", False) == "SPREAD (incl. overtime)"
+    assert card.row_label("cs", None, "2:0", "A", "B") == "2:0"
+
+
+def test_tennis_reason_does_not_quote_a_score_and_lesson_hides_the_watch_record():
+    from finalpoint import results as rs
+    pk = dict(pkey="ml||away", mkt="ml", line=None, sel="away", odds=1.41)
+    assert rs.reason("TN", pk, "lost", 1, 0, "Claire Liu", "Alexandra Eala") == "Claire Liu won the match, so Alexandra Eala did not."
+    assert rs.reason("TN", pk, "won", 0, 1, "Claire Liu", "Alexandra Eala") == "Alexandra Eala won the match."
+    txt = rs.lesson([dict(tier=3, status="lost")], {"WATCH": dict(w=89, l=8, u=17.7), "VALIDATED": dict(w=1, l=0, u=0.9)})
+    assert "WATCH 89W" not in txt and "VALIDATED 1W-0L" in txt

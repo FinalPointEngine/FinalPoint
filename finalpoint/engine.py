@@ -420,15 +420,15 @@ class FinalPoint:
 
     # ---------------------------------------------------------------- results
     def _finish(self, rec, hg, ag):
-        """Grade the picks, add MATCH ENDED, update the running record (fp_stats, fp_ledger) and edit the card."""
-        stats = self._rd("fp_stats", {})
+        """Grade the picks, add MATCH ENDED, update the running record (fp_stats2, fp_ledger) and edit the card."""
+        stats = self._rd("fp_stats2", {})
         end, graded = results.end_block(rec["tag"], rec, hg, ag, stats)
         rec["end"] = end
         led = self._rd("fp_ledger", [])
         for g in graded:
             if g.get("status") != "ungraded":
                 led.append(dict(tag=rec["tag"], key=g.get("pkey"), tier=g["tier"], status=g["status"], ret=g.get("ret", 0.0), t=end["at"]))
-        self._wr("fp_stats", stats)
+        self._wr("fp_stats2", stats)
         self._wr("fp_ledger", led[-500:])
         try:
             self._post(rec, card.render(rec))
@@ -464,7 +464,7 @@ class FinalPoint:
             self._wr("fp_bd:" + day, st)
             return
         ents = list(st["g"].values())
-        rec2 = (self._rd("fp_stats", {}) or {}).get("VALIDATED") or {}
+        rec2 = (self._rd("fp_stats2", {}) or {}).get("VALIDATED") or {}
         b1, b2 = st["b1"], st["b2"]
         i2, h2, ok2 = self._boards(board.render_picks(day, ents, self._base, (b1[0] or [None])[0], rec2, now), b2[0], b2[1])
         st["b2"] = [i2, h2]
