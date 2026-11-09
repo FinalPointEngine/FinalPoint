@@ -51,10 +51,11 @@ def _label(x):
 
 
 class FinalPoint:
-    def __init__(self, load, save, mirror, boards=None, chat=None):
+    def __init__(self, load, save, mirror, boards=None, chat=None, unpin=None):
         """load(key) -> str|None, save(key, str), mirror(rec, text) posts / edits the card of one match."""
         self._load, self._save, self._post = load, save, mirror
         self._boards, self._base = boards, board.link_base(chat)          # boards(texts, ids, hashes) -> (ids, hashes, ok), or None: off
+        self._unpin = unpin                                              # unpin(ids): takes yesterday's boards off the pin
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- store
@@ -314,11 +315,14 @@ class FinalPoint:
             picked.append(o)
             if len(picked) == 3:
                 return picked
-        for o in rest:
-            g = (o["mkt"], o["line"])
-            if g not in seen and len(picked) < 3 and self._tier(o) == 3 and kinds.get(o["mkt"]) == 3:
-                seen.add(g)
-                picked.append(o)
+        sels = {(o["mkt"], o["sel"]) for o in picked}
+        for strict in (True, False):                       # first a different side (Under 3.5 and Under 3 are one bet), then anything, so there are always 3 markets
+            for o in rest:
+                g = (o["mkt"], o["line"])
+                if g not in seen and len(picked) < 3 and self._tier(o) == 3 and kinds.get(o["mkt"]) == 3 and (not strict or (o["mkt"], o["sel"]) not in sels):
+                    seen.add(g)
+                    sels.add((o["mkt"], o["sel"]))
+                    picked.append(o)
         return picked
 
     @staticmethod
@@ -344,7 +348,7 @@ class FinalPoint:
                 if o["pkey"] in star and not tagtxt:
                     tagtxt = "WATCH (closest)"
                 mark = "derived" if o["derived"] else ("" if o["exact"] else "model")
-                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away, tag in ("TN", "AF", "BB", "HB")), o=o["odds"], f=o["fair"], e=o["e"],
+                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away, tag in ("TN", "AF", "BB", "HB", "VB")), o=o["odds"], f=o["fair"], e=o["e"],
                                  s=o["pkey"] in star, t=tagtxt, m=mark))
             if rows:
                 groups.append(dict(title=card.group_title(tag, g[0], not chosen[g]), rows=rows))
@@ -476,6 +480,16 @@ class FinalPoint:
         if ok1 and ok2:
             st["dirty"], st["urg"] = False, False
             st["t"] = now
+            if self._unpin and not st.get("unp"):
+                st["unp"] = True                                  # once a day: yesterday's pinned boards come off, today's stay
+                try:
+                    prev = (datetime.strptime(day, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                    ps = self._rd("fp_bd:" + prev, None) or {}
+                    ids = list((ps.get("b1") or [[]])[0]) + list((ps.get("b2") or [[]])[0])
+                    if ids:
+                        self._unpin(ids)
+                except Exception as ex:
+                    log.warning("old boards not unpinned: %s", ex)
         self._wr("fp_bd:" + day, st)
 
     def board_tick(self, now=None) -> int:
@@ -529,6 +543,9 @@ class FinalPoint:
                 if not rec or rec.get("end"):
                     continue
                 h, a = rec.get("home") or "", rec.get("away") or ""
+                if rec.get("tag") == "VB" and (max(hg, ag), min(hg, ag)) not in ((2, 0), (2, 1), (3, 0), (3, 1), (3, 2)):
+                    if same(h, home) and same(a, away) or same(h, away) and same(a, home):
+                        return "Volleyball results are SETS, not points: for example 3-1 or 2-0 (best of 5 ends 3-0, 3-1 or 3-2). Nothing saved."
                 if same(h, home) and same(a, away):
                     self._finish(rec, hg, ag)
                     return "Saved: %s %d-%d %s. Card updated." % (h, hg, ag, a)

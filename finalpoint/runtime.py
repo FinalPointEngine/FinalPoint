@@ -27,6 +27,7 @@ class FinalPointRuntime:
         if not (settings.TELEGRAM_TOKEN and chat):
             log.warning("TELEGRAM_TOKEN / TELEGRAM_CHAT_ID not set: FinalPoint cannot post")
         self.fp = FinalPoint(repo.kv_get, repo.kv_set, lambda rec, text: tn.mirror_card(rec, text, chat=chat, title="FINALPOINT"),
+                            unpin=(lambda ids: tn.unpin_pages(chat, ids)),
                             boards=(lambda texts, ids, hs: tn.board_pages(chat, texts, ids, hs)) if (settings.TELEGRAM_TOKEN and chat and os.environ.get("FP_BOARDS", "1") != "0") else None,
                             chat=chat)
         threading.Thread(target=self._settle_loop, daemon=True, name="fp-settle").start()

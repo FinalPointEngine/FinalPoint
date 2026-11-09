@@ -161,7 +161,7 @@ def test_match_ended_grades_the_top_three_in_plain_english_and_updates_the_recor
     assert fp.manual_result("Seattle", "Calgary", 3, 2).startswith("Saved")
     t = posts[-1]
     assert "<b>MATCH ENDED</b> · Seattle 3-2 Calgary" in t and "Calgary +1.5 [VALIDATED]: Won." in t
-    assert "points to spare" in t and "<b>Lesson:</b>" in t and "Record so far: VALIDATED 1W-0L" in t
+    assert "goals to spare" in t and "<b>Lesson:</b>" in t and "Record so far: VALIDATED 1W-0L" in t
     stats = json.loads(store["fp_stats2"])
     assert stats["VALIDATED"]["w"] == 1 and json.loads(store["fp_ledger"])
     assert fp.manual_result("Seattle", "Calgary", 1, 0).startswith("No open")           # a card is graded once
@@ -557,3 +557,44 @@ def test_handball_rows_name_the_club_and_say_sixty_minutes():
     assert card.row_label("ah", -2.5, "away", "HC Vardar 1961", "Fuchse Berlin", True) == "Berlin +2.5"
     assert card.row_label("ah", -2.5, "home", "HC Vardar 1961", "Fuchse Berlin", True) == "Vardar -2.5"
     assert card.group_title("HB", "1x2", False) == "MATCH RESULT (60 min)"
+
+
+def test_volleyball_results_are_sets_names_use_the_club_and_reasons_say_sets():
+    from finalpoint import card, results as rs
+    assert card.row_label("ah", -1.5, "home", "VC Zenit Kazan", "Dinamo Moscow", True) == "Kazan -1.5"
+    assert rs._unit("VB") == "sets" and rs._unit("HB") == "goals"
+    pk = dict(mkt="total", line=3.5, sel="over", odds=1.9, d="Over 3.5")
+    assert "sets" in rs.reason("VB", pk, "won", 3, 1, "A", "B")
+    fp, store, posts = _fp()
+    pl = _payload(0, tag="VB"); pl.update(home="Zenit Kazan", away="Dinamo Moscow")
+    fp.feed(pl)
+    assert fp.manual_result("Zenit Kazan", "Dinamo Moscow", 25, 20).startswith("Volleyball results are SETS")
+    assert not json.loads(store["fp:VB:m1"]).get("end")
+    assert fp.manual_result("Zenit Kazan", "Dinamo Moscow", 3, 1).startswith("Saved")
+
+
+def test_top3_does_not_repeat_the_same_side_and_goal_is_singular_and_yesterdays_boards_are_unpinned(monkeypatch):
+    from finalpoint import results as rs
+    assert rs._one(1, "goals") == "goal" and rs._one(2, "goals") == "goals"
+    pk = dict(mkt="total", line=3.5, sel="under", odds=1.9, d="Under 3.5")
+    assert "1 goal in total" in rs.reason("FB", pk, "won", 1, 0, "A", "B")
+    soft = {"ml": {"home": 1.75, "draw": 3.5, "away": 4.9}, "total": {"3.5": {"over": 3.8, "under": 1.25}, "3": {"over": 3.1, "under": 1.35}, "2.5": {"over": 2.1, "under": 1.7}},
+            "ah": {"-0.5": {"home": 1.72, "away": 2.05}, "0.5": {"home": 1.3, "away": 3.4}}}
+    fp, store, posts = _fp()
+    pl = _payload(0, soft=soft, pin=None, tag="FB")
+    fp.feed(pl)
+    rec = json.loads(store["fp:FB:m1"])
+    sels = [(p["d"].split()[0]) for p in rec["picks"]]
+    assert len(rec["picks"]) == 3 and sels.count("Under") <= 1
+    monkeypatch.setenv("FP_BOARD_MIN_SEC", "0")
+    gone, boards = [], []
+    st = {}
+    def boards_fn(texts, ids, hs):
+        boards.append(texts)
+        return (ids or [len(boards) * 10 + i for i in range(len(texts))]), (hs or ["h"] * len(texts)), True
+    store2 = {"fp_bd:2033-05-17": json.dumps({"b1": [[5], ["x"]], "b2": [[6], ["y"]]})}
+    fp = FinalPoint(lambda k: store2.get(k), lambda k, v: store2.__setitem__(k, v), lambda r, t: None, boards=boards_fn, chat="-1001", unpin=lambda ids: gone.extend(ids))
+    fp.feed(_payload(0))
+    assert sorted(gone) == [5, 6]
+    fp.feed(_payload(1))
+    assert sorted(gone) == [5, 6]                                 # only once a day

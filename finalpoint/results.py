@@ -196,18 +196,26 @@ def reason(tag, pick, status, hg, ag, home, away):
             tl = line if sel == "home" else -line
             who = "%s won by %d" % (win, abs(hg - ag)) if win else "the match was level"
             if diff > 1e-9:
-                return "Final %d-%d: %s. With %s %+g the pick had %s points to spare." % (hg, ag, who, team, tl, _n(diff))
+                return "Final %d-%d: %s. With %s %+g the pick had %s %s to spare." % (hg, ag, who, team, tl, _n(diff), _unit(tag))
             if diff < -1e-9:
                 return "Final %d-%d: %s. With %s %+g the pick missed by %s." % (hg, ag, who, team, tl, _n(-diff))
             return "Final %d-%d: %s. It landed exactly on the line, so the stake is returned." % (hg, ag, who)
         if mkt == "total":
             diff = (tot - line) if sel == "over" else (line - tot)
             word = "over" if tot > line else "under"
-            unit = {"FB": "goals", "IH": "goals", "HB": "goals", "TN": "games"}.get(tag, "points")
+            unit = _unit(tag)
             if abs(diff) < 1e-9:
-                return "%d %s in total, exactly on the %g line, so the stake is returned." % (tot, unit, line)
-            return "%d %s in total, %s %s the %g line." % (tot, unit, _n(abs(tot - line)), word, line)
+                return "%d %s in total, exactly on the %g line, so the stake is returned." % (tot, _one(tot, unit), line)
+            return "%d %s in total, %s %s the %g line." % (tot, _one(tot, unit), _n(abs(tot - line)), word, line)
     return "Final score %d-%d. This market follows the sport's own rule for %s." % (hg, ag, "quarter lines" if line is not None else "this bet")
+
+
+def _one(n, unit):
+    return unit[:-1] if n == 1 else unit                       # 1 goal, 2 goals
+
+
+def _unit(tag):
+    return {"FB": "goals", "IH": "goals", "HB": "goals", "TN": "games", "VB": "sets"}.get(tag, "points")
 
 
 def lesson(picks, stats):

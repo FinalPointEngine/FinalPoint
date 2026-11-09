@@ -519,3 +519,12 @@ def send(text: str, markup: dict = None, chat_id: str = None, silent: bool = Fal
 
 def notify(pick: dict) -> bool:
     return send(format_pick(pick), keyboard(pick["id"]))
+
+
+def unpin_pages(chat, ids):
+    """Take the given messages off the pin list. Never raises."""
+    for mid in ids or []:
+        try:
+            post_json(API.format(token=settings.TELEGRAM_TOKEN, method="unpinChatMessage"), dict(chat_id=chat, message_id=mid))
+        except Exception:
+            pass
