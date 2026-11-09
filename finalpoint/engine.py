@@ -344,7 +344,7 @@ class FinalPoint:
                 if o["pkey"] in star and not tagtxt:
                     tagtxt = "WATCH (closest)"
                 mark = "derived" if o["derived"] else ("" if o["exact"] else "model")
-                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away, tag in ("TN", "AF", "BB")), o=o["odds"], f=o["fair"], e=o["e"],
+                rows.append(dict(l=card.row_label(o["mkt"], o["line"], o["sel"], home, away, tag in ("TN", "AF", "BB", "HB")), o=o["odds"], f=o["fair"], e=o["e"],
                                  s=o["pkey"] in star, t=tagtxt, m=mark))
             if rows:
                 groups.append(dict(title=card.group_title(tag, g[0], not chosen[g]), rows=rows))

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 SEP = "━" * 15
 SPORT = {"FB": "Football", "TN": "Tennis", "IH": "Ice Hockey", "AF": "American Football", "HB": "Handball", "VB": "Volleyball", "BB": "Basketball"}
 TOTAL_WORD = {"FB": "GOALS", "IH": "GOALS", "HB": "GOALS", "AF": "POINTS", "BB": "POINTS", "VB": "POINTS", "TN": "GAMES"}
-OT = {"AF": " (incl. overtime)", "BB": " (incl. overtime)", "IH": " (incl. overtime)", "FB": " (90 min)"}
+OT = {"AF": " (incl. overtime)", "BB": " (incl. overtime)", "IH": " (incl. overtime)", "FB": " (90 min)", "HB": " (60 min)"}
 MKT_NAME = {"1x2": "match result", "ml": "moneyline", "ah": "handicap", "total": "total", "es": "exact sets", "cs": "correct score", "sh": "set handicap"}
 ORDER = {"1x2": 0, "ml": 0, "ah": 1, "total": 2}
 E = html.escape
@@ -52,6 +52,10 @@ def core(name):
 def _pair(home, away, last=False):
     """One short word per team for the price table: the first word, or the last when both start the same ('Real Madrid' / 'Real Sociedad')."""
     h, a = core(home).split(), core(away).split()
+    while len(h) > 1 and h[-1].isdigit():
+        h = h[:-1]                                              # 'Vardar 1961' -> 'Vardar'
+    while len(a) > 1 and a[-1].isdigit():
+        a = a[:-1]
     if h and a and (last or h[0].lower() == a[0].lower()) and h[-1].lower() != a[-1].lower():
         return h[-1], a[-1]
     return (h[0] if h else "Home"), (a[0] if a else "Away")

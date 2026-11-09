@@ -549,3 +549,11 @@ def test_american_football_names_use_the_nickname_and_the_spread_note_is_gone():
     pl = _payload(0, soft=soft, pin=pin, tag="AF"); pl.update(home="San Francisco 49ers", away="Las Vegas Raiders")
     fp.feed(pl)
     assert "underdog spread" not in posts[-1] and "49ers 1.22" in posts[-1] and "San Francisc" not in posts[-1].split("<pre>")[1]
+
+
+def test_handball_rows_name_the_club_and_say_sixty_minutes():
+    from finalpoint import card
+    assert card.row_label("1x2", None, "home", "THW Kiel", "SG Flensburg-Handewitt", True) == "Kiel"
+    assert card.row_label("ah", -2.5, "away", "HC Vardar 1961", "Fuchse Berlin", True) == "Berlin +2.5"
+    assert card.row_label("ah", -2.5, "home", "HC Vardar 1961", "Fuchse Berlin", True) == "Vardar -2.5"
+    assert card.group_title("HB", "1x2", False) == "MATCH RESULT (60 min)"
