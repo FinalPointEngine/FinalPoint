@@ -114,7 +114,7 @@ def pinnacle_scan(papi, kws: tuple, top_leagues: list, cat_by_id: dict, sports_r
         out["error"] = str(e)[:90]
         return out
     for f in fx if isinstance(fx, list) else []:
-        mk = (((f.get("bookmakerOdds") or {}).get("pinnacle") or {}).get("markets")) or {}
+        mk = ((__import__("services.oddspapi", fromlist=["pin_book"]).pin_book(f.get("bookmakerOdds")) or {}).get("markets")) or {}
         if not mk:
             continue
         out["fixtures"] += 1

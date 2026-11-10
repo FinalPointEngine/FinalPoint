@@ -214,6 +214,19 @@ class FinalPoint:
                     tgap["under"] = max(tgap["under"], pv["under"] - (1 - so))
             except (KeyError, TypeError, ValueError, ZeroDivisionError):
                 continue
+        if tag == "BB":                                      # basketball's tracker sends the price table itself: measure the same offset from it
+            byl = {}
+            for r in rows:
+                if r["mkt"] == "total" and r.get("line") is not None:
+                    byl.setdefault(float(r["line"]), {})[r["sel"]] = r
+            for ln, d in byl.items():
+                if "over" in d and "under" in d:
+                    try:
+                        so = (1 / d["over"]["odds"]) / (1 / d["over"]["odds"] + 1 / d["under"]["odds"])
+                        tgap["over"] = max(tgap["over"], d["over"]["p"] - so)
+                        tgap["under"] = max(tgap["under"], d["under"]["p"] - (1 - so))
+                    except (KeyError, TypeError, ZeroDivisionError):
+                        continue
         c["tgap"] = {k: round(v, 3) for k, v in tgap.items()}
         shift_why = "SportyBet's whole total sits %.0f pts away from Pinnacle's on every line: check both quote the same market (overtime?) before trusting it"
         out = []

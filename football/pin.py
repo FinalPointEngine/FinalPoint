@@ -12,7 +12,7 @@ from football import cfg, model
 from football.names import pair_score, bad_league, league_key, similarity, tokens
 from services.client import get_json, HttpError
 from services import odds_api as oa
-from services.oddspapi import side_market
+from services.oddspapi import pin_book, side_market
 
 log = logging.getLogger("football.pin")
 TIME_TOL_S = 25 * 60
@@ -140,7 +140,7 @@ def normalize_papi(fixtures: list, names: dict, catalog: dict, stats: dict = Non
     stats = stats if stats is not None else {}
     out = []
     for fx in fixtures or []:
-        bo = ((fx.get("bookmakerOdds") or {}).get("pinnacle") or {})
+        bo = pin_book(fx.get("bookmakerOdds"))
         home = names.get(str(fx.get("participant1Id"))) or fx.get("participant1Name")
         away = names.get(str(fx.get("participant2Id"))) or fx.get("participant2Name")
         if not home or not away:

@@ -17,7 +17,19 @@ log = get_logger("oddspapi")
 BASE = "https://api.oddspapi.io"
 BASE5 = "https://v5.oddspapi.io/en"   # newer API generation (fixtures/live, fixtures/odds, fixtures/settlement)
 BASKETBALL = 11
-BOOK = "pinnacle"
+BOOK = (os.environ.get("ODDSPAPI_BOOKMAKER") or "pinnacle").strip()      # the slug sent to OddsPapi; a plan may call it "pinnacle+30" (the 30 s delayed feed)
+
+
+def pin_book(bmap):
+    """Pinnacle's block of a fixture's bookmakerOdds, whatever the plan calls it (pinnacle, pinnacle+30, ...)."""
+    bmap = bmap or {}
+    for k in (BOOK, "pinnacle"):
+        if bmap.get(k):
+            return bmap[k]
+    for k, v in bmap.items():
+        if str(k).lower().startswith("pinnacle") and v:
+            return v
+    return {}
 # real OddsPapi catalog (probe 2026-10-11): full game incl. overtime = period "result"; halves are "p1+p2", quarters "p1".."p4"
 FULL_TIME = ("result", "fulltime", "full time", "ft", "match", "game")
 _SKIP_WORDS = ("team total", "odd", "even", "player", "race", "margin", "exact", "range", "first", "last", "both",
@@ -124,7 +136,7 @@ def normalize(fixtures: list, names: dict, catalog: dict, league: str, stats: di
         n_periods = 4
     events = []
     for fx in fixtures or []:
-        bo = ((fx.get("bookmakerOdds") or {}).get(BOOK) or {})
+        bo = pin_book(fx.get("bookmakerOdds"))
         home = names.get(str(fx.get("participant1Id"))) or fx.get("participant1Name")
         away = names.get(str(fx.get("participant2Id"))) or fx.get("participant2Name")
         if not home or not away:
@@ -183,7 +195,7 @@ def normalize(fixtures: list, names: dict, catalog: dict, league: str, stats: di
                     if not (lo <= line <= hi):
                         stats["odd_total"] = stats.get("odd_total", 0) + 1
                         continue       # a half / team line filed under the full game: never used as the full-game total
-                ev["markets"].setdefault(mkey, []).append(dict(book=BOOK, selection=sel, line=line, odds=price))
+                ev["markets"].setdefault(mkey, []).append(dict(book="pinnacle", selection=sel, line=line, odds=price))
         _fix_spread_sign(ev, stats)
         if ev["markets"]:
             events.append(ev)

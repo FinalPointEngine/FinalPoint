@@ -598,3 +598,26 @@ def test_top3_does_not_repeat_the_same_side_and_goal_is_singular_and_yesterdays_
     assert sorted(gone) == [5, 6]
     fp.feed(_payload(1))
     assert sorted(gone) == [5, 6]                                 # only once a day
+
+
+def test_basketball_totals_that_sit_a_constant_distance_from_pinnacle_are_not_validated():
+    fp, store, posts = _fp()
+    def pl(i):
+        x = _payload(i, soft=None, pin=None, tag="BB", label="Check %d" % (i + 1))
+        x["brows"] = [dict(market="totals", selection="under", line=l, odds=o, p=pu) for l, o, pu in ((220.5, 1.95, 0.585), (221.5, 1.90, 0.60))] + \
+                     [dict(market="totals", selection="over", line=l, odds=o, p=1 - pu) for l, o, pu in ((220.5, 1.85, 0.585), (221.5, 1.90, 0.60))]
+        return x
+    fp.feed(pl(0)); fp.feed(pl(1))
+    rec = json.loads(store["fp:BB:m1"])
+    assert rec["checks"][-1]["tgap"]["under"] >= 0.06
+    assert "Status:</b> VALIDATED" not in posts[-1]
+
+
+def test_pinnacle_block_is_found_whatever_the_plan_calls_it(monkeypatch):
+    from services import oddspapi as op
+    blk = {"markets": {"1": 1}}
+    assert op.pin_book({"pinnacle": blk}) is blk
+    assert op.pin_book({"bet365": {"x": 1}, "pinnacle+30": blk}) is blk
+    assert op.pin_book({"bet365": {"x": 1}}) == {} and op.pin_book(None) == {}
+    monkeypatch.setattr(op, "BOOK", "pinnacle+30")
+    assert op.pin_book({"pinnacle+30": blk, "pinnacle": {"markets": {}}}) is blk
